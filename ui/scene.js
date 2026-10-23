@@ -1,0 +1,572 @@
+/* 行为生态缸 —— 场景绘制。
+   全部用 Canvas 2D：径向渐变 + 加色混合做柔光和辉光，
+   不用 WebGL（透明 WebView2 下 WebGL 合成不稳）。
+   静态的玻璃/水体/内阴影缓存成一张底图，只有参数变化时才重建；
+   柔光用预渲染精灵，避免每帧创建大量渐变。 */
+const Scene = (() => {
+  const W = 224, H = 300;
+  const CX = 112, CY = 104, R = 88, RW = R - 4;
+  const TAU = Math.PI * 2;
+  // 主体尺寸跟着培养皿走，方便整体缩放。
+  const BODY_UNIT = 44 * (R / 132);
+
+  let canvas = null;
+  let ctx = null;
+  let dpr = 1;
+
+  let bg = null;
+  let bgCtx = null;
+  let bgKey = '';
+
+  let sprite = null;
+  let spriteHue = -1;
+
+  let motes = [];
+  let bubbles = [];
+  let reaction = 0;
+  let renderScale = 1;
+
+  const mix = (a, b, t) => a + (b - a) * t;
+  const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a < 0 ? 0 : a})`;
+
+  function init(el) {
+    canvas = el;
+    ctx = el.getContext('2d');
+    resize();
+    window.addEventListener('resize', resize);
+    seed();
+  }
+
+  function resize() {
+    dpr = Math.min(3, (window.devicePixelRatio || 1) * renderScale);
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    bg = null;
+    bgKey = '';
+  }
+
+  function setScale(scale) {
+    const v = Math.max(0.5, Math.min(2, scale || 1));
+    if (Math.abs(v - renderScale) < 0.001) return;
+    renderScale = v;
+    resize();
+  }
+
+  function seed() {
+    let s = 20261022;
+    const rnd = () => {
+      s = (s * 1664525 + 1013904223) % 4294967296;
+      return s / 4294967296;
+    };
+    motes = Array.from({ length: 28 }, () => ({
+      x: CX + (rnd() - 0.5) * RW * 1.7,
+      y: CY + (rnd() - 0.5) * RW * 1.7,
+      z: 0.25 + rnd() * 0.75,
+      p: rnd() * TAU,
+      v: 0.1 + rnd() * 0.35,
+    }));
+  }
+
+  function palette(hue) {
+    return {
+      body: [mix(126, 255, hue), mix(246, 214, hue), mix(224, 152, hue)],
+      deep: [mix(10, 30, hue), mix(40, 38, hue), mix(44, 34, hue)],
+      accent: [mix(96, 255, hue), mix(232, 186, hue), mix(208, 124, hue)],
+    };
+  }
+
+  /* ---------- 预渲染精灵 ---------- */
+
+  function ensureSprite(p) {
+    if (sprite && Math.abs(spriteHue - p.body[0]) < 2) return;
+    spriteHue = p.body[0];
+    const s = document.createElement('canvas');
+    s.width = s.height = 192;
+    const g = s.getContext('2d');
+    const rg = g.createRadialGradient(96, 96, 0, 96, 96, 96);
+    rg.addColorStop(0, rgba(p.body, 1));
+    rg.addColorStop(0.32, rgba(p.body, 0.42));
+    rg.addColorStop(0.7, rgba(p.body, 0.1));
+    rg.addColorStop(1, rgba(p.body, 0));
+    g.fillStyle = rg;
+    g.fillRect(0, 0, 192, 192);
+    sprite = s;
+  }
+
+  function drawSprite(x, y, size, alpha) {
+    if (!sprite || alpha <= 0.002) return;
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.drawImage(sprite, x - size / 2, y - size / 2, size, size);
+    ctx.globalAlpha = 1;
+  }
+
+  /* ---------- 静态底图 ---------- */
+
+  function buildBackground(p, tr) {
+    if (!bg) {
+      bg = document.createElement('canvas');
+      bg.width = canvas.width;
+      bg.height = canvas.height;
+      bgCtx = bg.getContext('2d');
+      bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    const c = bgCtx;
+    c.clearRect(0, 0, W, H);
+
+    // 桌面投影
+    c.save();
+    c.translate(CX, CY + R + 14);
+    c.scale(1, 0.2);
+    const sh = c.createRadialGradient(0, 0, 4, 0, 0, 120);
+    sh.addColorStop(0, 'rgba(0,0,0,0.26)');
+    sh.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = sh;
+    c.beginPath();
+    c.arc(0, 0, 120, 0, TAU);
+    c.fill();
+    c.restore();
+
+    // 皿外微光
+    const halo = c.createRadialGradient(CX, CY, R * 0.86, CX, CY, R * 1.42);
+    halo.addColorStop(0, rgba(p.body, 0.06 + 0.1 * tr.glow));
+    halo.addColorStop(1, rgba(p.body, 0));
+    c.fillStyle = halo;
+    c.beginPath();
+    c.arc(CX, CY, R * 1.42, 0, TAU);
+    c.fill();
+
+    // 水体
+    const g = c.createRadialGradient(CX - 42, CY - 58, 12, CX, CY, RW);
+    g.addColorStop(0, rgba([p.deep[0] + 40, p.deep[1] + 54, p.deep[2] + 50], 0.62));
+    g.addColorStop(0.55, rgba(p.deep, 0.72));
+    g.addColorStop(1, rgba([p.deep[0] * 0.6, p.deep[1] * 0.76, p.deep[2] * 0.76], 0.86));
+    c.beginPath();
+    c.arc(CX, CY, RW, 0, TAU);
+    c.fillStyle = g;
+    c.fill();
+
+    // 水面反光
+    const top = c.createLinearGradient(0, CY - RW, 0, CY - RW * 0.05);
+    top.addColorStop(0, 'rgba(214, 255, 250, 0.10)');
+    top.addColorStop(1, 'rgba(214, 255, 250, 0)');
+    c.fillStyle = top;
+    c.beginPath();
+    c.arc(CX, CY, RW, 0, TAU);
+    c.fill();
+
+    // 浑浊
+    if (tr.turbidity > 0.02) {
+      const h = c.createRadialGradient(CX, CY - 10, 10, CX, CY, RW);
+      h.addColorStop(0, `rgba(158,150,104,${0.03 + tr.turbidity * 0.10})`);
+      h.addColorStop(1, `rgba(110,104,72,${0.10 + tr.turbidity * 0.26})`);
+      c.fillStyle = h;
+      c.beginPath();
+      c.arc(CX, CY, RW, 0, TAU);
+      c.fill();
+    }
+
+    // 内阴影
+    const inner = c.createRadialGradient(CX, CY, RW * 0.62, CX, CY, RW * 1.02);
+    inner.addColorStop(0, 'rgba(0,0,0,0)');
+    inner.addColorStop(0.72, 'rgba(0,0,0,0.08)');
+    inner.addColorStop(1, 'rgba(0,0,0,0.34)');
+    c.fillStyle = inner;
+    c.beginPath();
+    c.arc(CX, CY, RW, 0, TAU);
+    c.fill();
+
+    // 玻璃边缘
+    c.beginPath();
+    c.arc(CX, CY, R - 5, 0, TAU);
+    c.lineWidth = 11;
+    c.strokeStyle = 'rgba(168, 226, 214, 0.12)';
+    c.stroke();
+
+    c.beginPath();
+    c.arc(CX, CY, R - 1, 0, TAU);
+    c.lineWidth = 1.2;
+    c.strokeStyle = 'rgba(226, 255, 248, 0.42)';
+    c.stroke();
+
+    c.beginPath();
+    c.arc(CX, CY, R - 10, 0, TAU);
+    c.lineWidth = 0.8;
+    c.strokeStyle = 'rgba(190, 240, 232, 0.16)';
+    c.stroke();
+
+    c.lineCap = 'round';
+    c.beginPath();
+    c.arc(CX, CY, R - 6, -2.75, -2.02);
+    c.lineWidth = 5;
+    c.strokeStyle = `rgba(255,255,255,${0.10 + 0.10 * tr.glow})`;
+    c.stroke();
+    c.beginPath();
+    c.arc(CX, CY, R - 7, -2.62, -2.18);
+    c.lineWidth = 2;
+    c.strokeStyle = 'rgba(255,255,255,0.26)';
+    c.stroke();
+  }
+
+  /* ---------- 动态元素 ---------- */
+
+  function drawCaustics(t, p, glow) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      const x = CX + Math.sin(t * 0.13 + i * 1.9) * 46;
+      const y = CY - 40 + Math.cos(t * 0.11 + i * 2.2) * 30;
+      drawSprite(x, y, 190 + i * 24, 0.035 + 0.05 * glow);
+    }
+    ctx.restore();
+  }
+
+  function drawMotes(t, p, tr, m) {
+    ctx.save();
+    const boost = 0.75 + 0.09 * (m || 0);
+    for (const mote of motes) {
+      const x = mote.x + Math.sin(t * mote.v + mote.p) * 7;
+      const y = mote.y + Math.cos(t * mote.v * 0.8 + mote.p) * 5;
+      const a = (0.07 + mote.z * 0.18) * (1 - tr.turbidity * 0.35) * boost;
+      ctx.fillStyle = rgba(p.body, a);
+      ctx.beginPath();
+      ctx.arc(x, y, 0.6 + mote.z * 1.3, 0, TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /// 繁盛阶段的共生小体：围绕主体缓慢公转，用细丝连着。
+  function drawSatellites(t, c, p, tr, front) {
+    const m = c.m || 0;
+    const count = Math.min(5, Math.max(0, Math.floor((m - 2.3) * 3)));
+    if (!count) return;
+    for (let i = 0; i < count; i++) {
+      const isFront = i % 2 === 0;
+      if (isFront !== front) continue;
+      const a = t * 0.28 + (i * TAU) / count;
+      const rr = c.r * (1.75 + 0.18 * Math.sin(t * 0.6 + i));
+      const x = c.x + Math.cos(a) * rr;
+      const y = c.y + Math.sin(a) * rr * 0.85;
+      const r = 2.2 + (i % 3) * 0.9;
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.quadraticCurveTo(
+        (x + c.x) / 2 + Math.sin(t + i) * 8,
+        (y + c.y) / 2 + Math.cos(t + i) * 8,
+        c.x,
+        c.y
+      );
+      ctx.strokeStyle = rgba(p.body, 0.12);
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fillStyle = rgba(p.body, 0.55);
+      ctx.fill();
+      ctx.lineWidth = 0.6;
+      ctx.strokeStyle = rgba([255, 255, 250], 0.35);
+      ctx.stroke();
+    }
+  }
+
+  function pose(t, st) {
+    const tr = st.traits;
+    // 成熟度 0..4：阶段 + 阶段内进度，形态连续过渡而不是跳变。
+    const m = (st.stage || 0) + (st.growth || 0);
+    const base =
+      BODY_UNIT *
+      (0.62 + 0.16 * m) *
+      (1 + 0.035 * Math.sin(t * 1.7) + reaction * 0.16);
+    return {
+      x: CX + Math.sin(t * 0.21) * 15 * tr.motility + Math.sin(t * 0.07) * 5,
+      y: CY + Math.cos(t * 0.17) * 11 * tr.motility + Math.sin(t * 0.9) * 1.5,
+      r: base,
+      stage: st.stage,
+      m,
+    };
+  }
+
+  function blob(x, y, r, t, wob) {
+    const N = 64;
+    ctx.beginPath();
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * TAU;
+      const k =
+        1 +
+        wob *
+          (0.55 * Math.sin(3 * a + t * 0.7) +
+            0.32 * Math.sin(5 * a - t * 0.95) +
+            0.2 * Math.sin(2 * a + t * 0.4));
+      const px = x + Math.cos(a) * r * k;
+      const py = y + Math.sin(a) * r * k;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
+  function drawCilia(t, c, p, tr, front) {
+    const m = c.m || 0;
+    const n = Math.round(6 + 2.4 * m);
+    const grow = 0.32 + 0.11 * m;
+    const fork = Math.max(0, Math.min(1, (m - 1.8) / 1.4));
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const isFront = i % 2 === 0;
+      if (isFront !== front) continue;
+      const a = (i / n) * TAU + 0.35 * Math.sin(t * 0.25 + i);
+      const len = c.r * grow * (0.8 + 0.45 * Math.sin(t * 0.8 + i * 1.3));
+      const x0 = c.x + Math.cos(a) * c.r * 0.9;
+      const y0 = c.y + Math.sin(a) * c.r * 0.9;
+      const ca = a + 0.65 * Math.sin(t * 1.15 + i * 0.9);
+      const mx = c.x + Math.cos(ca) * (c.r + len * 0.6);
+      const my = c.y + Math.sin(ca) * (c.r + len * 0.6);
+      const x1 = c.x + Math.cos(ca) * (c.r + len);
+      const y1 = c.y + Math.sin(ca) * (c.r + len);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(mx, my, x1, y1);
+      ctx.lineWidth = 1.7;
+      ctx.strokeStyle = rgba(p.body, 0.26 + 0.3 * tr.glow);
+
+      // 成体之后触须末端分叉
+      if (fork > 0.05) {
+        const tangent = ca + Math.PI / 2;
+        const bl = len * 0.32 * fork;
+        for (const side of [-1, 1]) {
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(
+            x1 + Math.cos(ca + tangent * side) * bl,
+            y1 + Math.sin(ca + tangent * side) * bl
+          );
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawGlow(t, c, p, tr) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const m = c.m || 0;
+    drawSprite(c.x, c.y, c.r * (5.2 + 0.3 * m), (0.32 + 0.45 * tr.glow) * (0.82 + 0.09 * m));
+    ctx.restore();
+  }
+
+  function drawBody(t, c, p, tr) {
+    const m = c.m || 0;
+    // 孢子阶段有一层半透明的壳，随成熟度淡出。
+    const shell = Math.max(0, 1.25 - m);
+    if (shell > 0.02) {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r * 1.16, 0, TAU);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = rgba(p.accent, 0.3 * shell);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r * 1.3, 0, TAU);
+      ctx.lineWidth = 0.7;
+      ctx.strokeStyle = rgba(p.accent, 0.14 * shell);
+      ctx.stroke();
+    }
+    blob(c.x, c.y, c.r, t, 0.03 + 0.022 * Math.min(m, 3));
+    const bodyGrad = ctx.createRadialGradient(
+      c.x - c.r * 0.35,
+      c.y - c.r * 0.4,
+      c.r * 0.08,
+      c.x,
+      c.y,
+      c.r * 1.05
+    );
+    bodyGrad.addColorStop(0, rgba([p.body[0] + 40, p.body[1] + 12, p.body[2] + 14], 0.92));
+    bodyGrad.addColorStop(0.55, rgba(p.body, 0.72));
+    bodyGrad.addColorStop(1, rgba(p.accent, 0.38));
+    ctx.fillStyle = bodyGrad;
+    ctx.fill();
+
+    ctx.lineWidth = 1.3;
+    ctx.strokeStyle = rgba(p.body, 0.55 + 0.25 * tr.vitality);
+    ctx.stroke();
+
+    // 内侧薄膜
+    blob(c.x, c.y, c.r * 0.82, t + 1.7, 0.05);
+    ctx.lineWidth = 0.9;
+    ctx.strokeStyle = rgba([255, 255, 250], 0.1 + 0.1 * tr.vitality);
+    ctx.stroke();
+
+    // 液泡：成熟之后才出现
+    const vac = Math.min(3, Math.max(0, Math.floor(m - 0.6)));
+    for (let i = 0; i < vac; i++) {
+      const a = 1.2 + i * 2.1 + Math.sin(t * 0.3 + i) * 0.2;
+      const rr = c.r * (0.28 + 0.12 * i);
+      const vx = c.x + Math.cos(a) * rr;
+      const vy = c.y + Math.sin(a) * rr;
+      ctx.beginPath();
+      ctx.arc(vx, vy, c.r * (0.1 + 0.02 * (i % 2)), 0, TAU);
+      ctx.fillStyle = rgba([255, 255, 250], 0.07);
+      ctx.fill();
+      ctx.strokeStyle = rgba(p.body, 0.3);
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
+    }
+
+    // 细胞核
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const nr = c.r * (0.3 + 0.03 * Math.sin(t * 1.9));
+    const ng = ctx.createRadialGradient(c.x + c.r * 0.08, c.y - c.r * 0.1, 0, c.x, c.y, nr);
+    ng.addColorStop(0, rgba([255, 255, 250], 0.55 + 0.3 * tr.glow));
+    ng.addColorStop(0.6, rgba(p.body, 0.35));
+    ng.addColorStop(1, rgba(p.body, 0));
+    ctx.fillStyle = ng;
+    ctx.beginPath();
+    ctx.arc(c.x + c.r * 0.08, c.y - c.r * 0.1, nr, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    // 第二细胞核：成体之后
+    if (m > 2.2) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const sx = c.x - c.r * 0.34;
+      const sy = c.y + c.r * 0.26;
+      const sr = c.r * 0.16 * (1 + 0.05 * Math.sin(t * 2.3));
+      const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, sr);
+      sg.addColorStop(0, rgba([235, 255, 248], 0.35));
+      sg.addColorStop(1, rgba(p.body, 0));
+      ctx.fillStyle = sg;
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // 发光点
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 6; i++) {
+      const a = t * 0.32 + (i * TAU) / 6;
+      const rr = c.r * (0.46 + 0.12 * Math.sin(t * 0.7 + i));
+      const x = c.x + Math.cos(a) * rr;
+      const y = c.y + Math.sin(a) * rr * 0.92;
+      const pulse = 0.45 + 0.55 * Math.abs(Math.sin(t * 1.1 + i * 0.9));
+      drawSprite(x, y, 9 + pulse * 7, 0.5 * pulse * (0.4 + 0.6 * tr.glow));
+    }
+    ctx.restore();
+
+    // 压力斑
+    if (tr.spots > 0.04) {
+      ctx.save();
+      for (let i = 0; i < 5; i++) {
+        const a = i * 1.7 + 0.4;
+        const rr = c.r * (0.32 + (0.3 * ((i * 37) % 10)) / 10);
+        const x = c.x + Math.cos(a) * rr;
+        const y = c.y + Math.sin(a) * rr;
+        ctx.fillStyle = `rgba(46,58,44,${tr.spots * 0.4})`;
+        ctx.beginPath();
+        ctx.ellipse(x, y, 2.2 + (i % 3), 1.6 + (i % 2), a, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function updateBubbles(dt) {
+    for (const b of bubbles) {
+      b.life -= dt;
+      b.y -= b.v * dt;
+      b.x += Math.sin(b.y * 0.09 + b.p) * dt * 6;
+    }
+    bubbles = bubbles.filter((b) => b.life > 0 && b.y > CY - RW);
+  }
+
+  function drawBubbles() {
+    if (!bubbles.length) return;
+    ctx.save();
+    for (const b of bubbles) {
+      const a = Math.min(1, b.life * 2) * b.a;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, TAU);
+      ctx.strokeStyle = `rgba(220,255,248,${a})`;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, b.r * 0.3, 0, TAU);
+      ctx.fillStyle = `rgba(255,255,255,${a * 0.7})`;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ---------- 主循环 ---------- */
+
+  function frame(ts, st, dt) {
+    if (!ctx || !st) return;
+    const t = ts / 1000;
+    const tr = st.traits;
+    const p = palette(tr.hue);
+    reaction = Math.max(0, reaction - dt * 2.2);
+
+    ensureSprite(p);
+
+    const key = `${tr.hue.toFixed(2)}|${tr.turbidity.toFixed(2)}|${tr.glow.toFixed(2)}|${dpr}`;
+    if (key !== bgKey) {
+      bgKey = key;
+      buildBackground(p, tr);
+    }
+
+    ctx.clearRect(0, 0, W, H);
+    if (bg) ctx.drawImage(bg, 0, 0, W, H);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(CX, CY, RW, 0, TAU);
+    ctx.clip();
+
+    drawCaustics(t, p, tr.glow);
+
+    const c = pose(t, st);
+    drawMotes(t, p, tr, c.m);
+
+    drawSatellites(t, c, p, tr, false);
+    drawCilia(t, c, p, tr, false);
+    drawGlow(t, c, p, tr);
+    drawBody(t, c, p, tr);
+    drawCilia(t, c, p, tr, true);
+    drawSatellites(t, c, p, tr, true);
+
+    updateBubbles(dt);
+    drawBubbles();
+    ctx.restore();
+  }
+
+  function burst(n = 12) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * TAU;
+      const rr = Math.random() * RW * 0.8;
+      bubbles.push({
+        x: CX + Math.cos(a) * rr,
+        y: CY + Math.sin(a) * rr,
+        r: 1.2 + Math.random() * 2.6,
+        v: 14 + Math.random() * 22,
+        life: 1.6 + Math.random() * 2.4,
+        a: 0.25 + Math.random() * 0.3,
+        p: Math.random() * TAU,
+      });
+    }
+    if (bubbles.length > 90) bubbles = bubbles.slice(-90);
+  }
+
+  function react() {
+    reaction = 1;
+  }
+
+  return { init, frame, burst, react, setScale };
+})();

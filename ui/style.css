@@ -1,0 +1,373 @@
+:root {
+  --ink: #dff3ee;
+  --dim: rgba(223, 243, 238, 0.55);
+  --line: rgba(126, 230, 205, 0.16);
+  --panel: rgba(7, 18, 20, 0.84);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+#app {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 224px;
+  height: 300px;
+  transform-origin: top left;
+}
+
+body.boot #app,
+body.boot #dock { visibility: hidden; }
+
+/* 收起后的小圆点，不依赖系统托盘 */
+#dock {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 40px;
+  height: 40px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+#dock .orb {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #eafff8, #7ef4de 45%, #0d3a3a 100%);
+  box-shadow: 0 0 10px rgba(126, 244, 222, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+body.collapsed #app { display: none; }
+body.collapsed #dock { display: flex; }
+
+body {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+  color: var(--ink);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+#stage {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+/* ---------- 状态卡 ---------- */
+
+#card {
+  position: absolute;
+  left: 10px;
+  top: 198px;
+  width: 204px;
+  padding: 8px 10px 8px;
+  border-radius: 12px;
+  background: rgba(8, 20, 22, 0.9);
+  border: 1px solid rgba(126, 230, 205, 0.2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  opacity: 0;
+  transform: translateY(6px) scale(0.985);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+#card.show {
+  opacity: 1;
+  transform: none;
+}
+
+.card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+#stage-name {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: #b8f4e4;
+}
+
+#stage-meta {
+  font-size: 9px;
+  color: var(--dim);
+}
+
+.bars {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.bar {
+  flex: 1;
+  min-width: 0;
+}
+
+.bar span {
+  display: block;
+  font-size: 8px;
+  color: rgba(223, 243, 238, 0.62);
+  margin-bottom: 3px;
+  letter-spacing: 0.02em;
+}
+
+.track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(96, 226, 208, 0.65), rgba(150, 255, 232, 0.95));
+  transition: width 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fill.load {
+  background: linear-gradient(90deg, rgba(226, 168, 96, 0.6), rgba(255, 138, 96, 0.95));
+}
+
+#caption {
+  font-size: 10px;
+  line-height: 1.35;
+  color: rgba(223, 243, 238, 0.8);
+  min-height: 13px;
+}
+
+#today {
+  margin-top: 3px;
+  font-size: 9px;
+  color: rgba(223, 243, 238, 0.45);
+  letter-spacing: 0.02em;
+}
+
+#paused-badge {
+  display: none;
+  margin-top: 4px;
+  font-size: 9px;
+  color: rgba(255, 208, 150, 0.85);
+}
+
+#paused-badge.show { display: block; }
+
+/* ---------- 右键菜单 ---------- */
+
+#menu {
+  position: absolute;
+  min-width: 112px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(6, 16, 18, 0.96);
+  border: 1px solid rgba(126, 230, 205, 0.2);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: scale(0.96);
+  transform-origin: top left;
+  transition: opacity 110ms ease, transform 110ms ease;
+  pointer-events: none;
+}
+
+#menu.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+#menu .item {
+  padding: 6px 9px;
+  font-size: 11px;
+  border-radius: 7px;
+  color: rgba(223, 243, 238, 0.88);
+}
+
+#menu .item:hover {
+  background: rgba(126, 230, 205, 0.12);
+}
+
+#menu .item.danger {
+  color: rgba(255, 170, 150, 0.9);
+}
+
+#menu .item.danger:hover {
+  background: rgba(255, 120, 100, 0.14);
+}
+
+/* ---------- 关于 ---------- */
+
+#about {
+  position: absolute;
+  left: 10px;
+  top: 26px;
+  width: 204px;
+  padding: 11px 12px;
+  border-radius: 13px;
+  background: rgba(6, 16, 18, 0.94);
+  border: 1px solid var(--line);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+#about.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+#about h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #b8f4e4;
+}
+
+#about p {
+  margin: 0 0 6px;
+  font-size: 9.5px;
+  line-height: 1.55;
+  color: rgba(223, 243, 238, 0.78);
+}
+
+#about p.dim {
+  color: rgba(223, 243, 238, 0.45);
+  margin-bottom: 0;
+}
+
+/* ---------- 自检 ---------- */
+
+#diag {
+  position: absolute;
+  left: 10px;
+  top: 20px;
+  width: 204px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(6, 16, 18, 0.93);
+  border: 1px solid rgba(126, 230, 205, 0.2);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+#diag.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.diag-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #b8f4e4;
+  margin-bottom: 6px;
+}
+
+#diag-close {
+  color: rgba(223, 243, 238, 0.5);
+  cursor: pointer;
+}
+
+#diag-close:hover { color: rgba(223, 243, 238, 0.9); }
+
+.diag-grid {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  row-gap: 3px;
+  font-size: 9.5px;
+}
+
+.diag-grid span { color: rgba(223, 243, 238, 0.5); }
+
+.diag-grid b {
+  font-weight: 500;
+  color: rgba(223, 243, 238, 0.9);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diag-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 24px;
+  margin: 7px 0 5px;
+}
+
+.diag-bars i {
+  flex: 1;
+  min-height: 1px;
+  border-radius: 1px;
+  background: rgba(126, 230, 205, 0.75);
+  opacity: 0.2;
+}
+
+.diag-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: rgba(223, 243, 238, 0.6);
+}
+
+.diag-path {
+  font-size: 8px;
+  color: rgba(223, 243, 238, 0.38);
+  margin-top: 6px;
+  word-break: break-all;
+  line-height: 1.35;
+}
+
+.diag-note {
+  font-size: 8px;
+  color: rgba(223, 243, 238, 0.35);
+  margin-top: 5px;
+}
+
+/* ---------- 提示 ---------- */
+
+#toast {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translate(-50%, -6px);
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(6, 16, 18, 0.9);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: rgba(223, 243, 238, 0.85);
+  opacity: 0;
+  transition: opacity 220ms ease, transform 220ms ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}

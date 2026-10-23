@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #101418; }
+  .desk {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(160deg, rgba(18, 24, 30, 0.55), rgba(8, 12, 16, 0.72)),
+      url("desk-bg.png") center/cover no-repeat,
+      #12171c;
+  }
+  .desk::after {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  iframe {
+    position: absolute; left: 24px; top: 24px;
+    width: 224px; height: 300px;
+    border: 0; background: transparent;
+  }
+</style>
+</head>
+<body>
+  <div class="desk"></div>
+  <iframe src="../ui/index.html" allowtransparency="true"></iframe>
+</body>
+</html>

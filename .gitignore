@@ -1,0 +1,16 @@
+# 工具链与构建产物
+.tools/
+target/
+dist/
+gen/
+
+# 运行数据（存档、指标、日志、WebView2 缓存）
+data/
+*.log
+
+# 依赖
+ui/node_modules/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db

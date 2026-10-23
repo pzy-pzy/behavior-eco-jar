@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>行为生态缸</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body class="boot">
+  <div id="app">
+    <canvas id="stage"></canvas>
+
+    <div id="card">
+      <div class="card-top">
+        <span id="stage-name">孢子</span>
+        <span id="stage-meta">累计 0 分钟</span>
+      </div>
+      <div class="bars">
+        <div class="bar"><span>专注</span><div class="track"><div id="b-focus" class="fill"></div></div></div>
+        <div class="bar"><span>节奏</span><div class="track"><div id="b-rhythm" class="fill"></div></div></div>
+        <div class="bar"><span>平静</span><div class="track"><div id="b-calm" class="fill"></div></div></div>
+        <div class="bar"><span>负荷</span><div class="track"><div id="b-load" class="fill load"></div></div></div>
+        <div class="bar"><span>探索</span><div class="track"><div id="b-variety" class="fill"></div></div></div>
+      </div>
+      <div id="caption">它还在适应这里。</div>
+      <div id="today">今天 0 分钟 · 0 次休息</div>
+      <div id="paused-badge">观察已暂停</div>
+    </div>
+
+    <div id="menu">
+      <div class="item" data-act="pause">暂停观察</div>
+      <div class="item" data-act="diag">自检面板</div>
+      <div class="item" data-act="scale">大小：紧凑</div>
+      <div class="item" data-act="opacity">不透明度：100%</div>
+      <div class="item" data-act="collapse">收进小圆点</div>
+      <div class="item" data-act="reset">重置生态缸</div>
+      <div class="item" data-act="autostart">开机自启</div>
+      <div class="item" data-act="about">关于这个缸</div>
+      <div class="item danger" data-act="quit">退出</div>
+    </div>
+
+    <div id="diag">
+      <div class="diag-top">
+        <span>自检</span>
+        <span id="diag-close">关闭</span>
+      </div>
+      <div class="diag-grid">
+        <span>状态</span><b id="d-state">观察中</b>
+        <span>运行</span><b id="d-uptime">0 分钟</b>
+        <span>空闲</span><b id="d-idle">0s</b>
+        <span>输入</span><b id="d-input">0%</b>
+        <span>前台</span><b id="d-fg">—</b>
+        <span>自启</span><b id="d-auto">—</b>
+        <span>托盘</span><b id="d-tray">—</b>
+      </div>
+      <div class="diag-bars" id="d-bars"></div>
+      <div class="diag-line">
+        <span id="d-day">今日 0 分钟</span>
+        <span id="d-breaks">0 次休息</span>
+      </div>
+      <div class="diag-path" id="d-data">—</div>
+      <div class="diag-note">应用名只在本机显示，不写入磁盘。</div>
+    </div>
+
+    <div id="about">
+      <h3>行为生态缸</h3>
+      <p>它不是游戏。没有任务，也没有奖励。它只是住在你桌面上的一个小东西，靠你真实的工作节奏活着。</p>
+      <p>它只读取系统的空闲时长和前台应用切换，不读窗口标题、不记录输入、不联网。应用名只在内存里停留 45 分钟。</p>
+      <p class="dim">右键可暂停、调大小与透明度、收进小圆点；Ctrl+Alt+J 随时隐藏/显示。</p>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+
+  <div id="dock" title="行为生态缸">
+    <div class="orb"></div>
+  </div>
+
+  <script src="scene.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
