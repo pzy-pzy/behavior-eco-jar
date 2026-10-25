@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::signature::{clamp01, Signature};
 
+/// 阶段门槛(活跃分钟)。一代约 1-2 周(设计文档 §11-1 定案)。
+/// 演示模式通过 stage_scale 压缩,不动这张表。
 pub const STAGES: [(f64, &str); 4] = [
     (0.0, "孢子"),
-    (45.0, "幼体"),
-    (180.0, "成体"),
-    (480.0, "繁盛"),
+    (90.0, "幼体"),
+    (300.0, "成体"),
+    (900.0, "繁盛"),
 ];
 
 /// 个体基因:同物种内的随机差异,出生时定、终身不变,收集后随档案冻存。
@@ -169,6 +171,13 @@ pub struct Eco {
     pub last_tick_ms: u64,
     pub last_break_ms: u64,
     pub stage: u8,
+    /// 阶段门槛缩放系数:门槛 × 该值。正常 1.0;演示 0.1(90 活跃分钟走完一代)。
+    #[serde(default = "one")]
+    pub stage_scale: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 impl Default for Eco {
@@ -186,6 +195,7 @@ impl Default for Eco {
             last_tick_ms: 0,
             last_break_ms: 0,
             stage: 0,
+            stage_scale: 1.0,
         }
     }
 }
@@ -248,7 +258,7 @@ impl Eco {
         }
 
         let prev = self.stage;
-        self.stage = stage_index(self.active_minutes);
+        self.stage = stage_index(self.active_minutes / self.stage_scale.max(0.01));
         prev != self.stage
     }
 
@@ -259,6 +269,7 @@ impl Eco {
     /// 当前阶段内的成长进度 0..1。
     pub fn growth(&self) -> f32 {
         let idx = self.stage as usize;
+        let m = self.active_minutes / self.stage_scale.max(0.01);
         let lo = STAGES[idx].0;
         let hi = if idx + 1 < STAGES.len() {
             STAGES[idx + 1].0
@@ -268,7 +279,7 @@ impl Eco {
         if hi <= lo {
             return 1.0;
         }
-        clamp01(((self.active_minutes - lo) / (hi - lo)) as f32)
+        clamp01(((m - lo) / (hi - lo)) as f32)
     }
 
     /// 一句话解读。
@@ -301,6 +312,32 @@ pub fn stage_index(minutes: f64) -> u8 {
         }
     }
     idx
+}
+
+/// 收集档案里冻存的外观特征,图鉴"探视"时用这些参数复现这只生物。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EcoVisual {
+    pub vitality: f32,
+    pub glow: f32,
+    pub hue: f32,
+    pub turbidity: f32,
+    pub motility: f32,
+    pub rhythm_t: f32,
+    pub spots: f32,
+}
+
+impl From<&Eco> for EcoVisual {
+    fn from(e: &Eco) -> Self {
+        Self {
+            vitality: e.vitality,
+            glow: e.glow,
+            hue: e.hue,
+            turbidity: e.turbidity,
+            motility: e.motility,
+            rhythm_t: e.rhythm_t,
+            spots: e.spots,
+        }
+    }
 }
 
 impl Signature {
@@ -352,24 +389,33 @@ mod tests {
     #[test]
     fn offline_decay_keeps_progress() {
         let mut eco = Eco::default();
-        eco.active_minutes = 200.0;
+        eco.active_minutes = 400.0;
         eco.stage = stage_index(eco.active_minutes);
         eco.vitality = 0.9;
         eco.last_tick_ms = 1_000_000;
         eco.apply_offline(1_000_000 + 8 * 3600 * 1000);
         assert!(eco.vitality < 0.5, "vitality={}", eco.vitality);
         assert_eq!(eco.stage, 2);
-        assert!(eco.active_minutes >= 200.0);
+        assert!(eco.active_minutes >= 400.0);
     }
 
     #[test]
     fn stages_advance() {
         assert_eq!(stage_index(0.0), 0);
-        assert_eq!(stage_index(44.9), 0);
-        assert_eq!(stage_index(45.0), 1);
-        assert_eq!(stage_index(179.0), 1);
-        assert_eq!(stage_index(180.0), 2);
+        assert_eq!(stage_index(89.9), 0);
+        assert_eq!(stage_index(90.0), 1);
+        assert_eq!(stage_index(299.0), 1);
+        assert_eq!(stage_index(300.0), 2);
         assert_eq!(stage_index(10_000.0), 3);
+    }
+
+    #[test]
+    fn stage_scale_compresses_demo_generations() {
+        let mut eco = Eco::default();
+        eco.stage_scale = 0.1;
+        eco.active_minutes = 30.0;
+        eco.tick(&Signature::default(), 0.0, 1.0, 1_000);
+        assert_eq!(eco.stage, 2, "门槛×0.1 后 30 分钟即到成体");
     }
 
     #[test]

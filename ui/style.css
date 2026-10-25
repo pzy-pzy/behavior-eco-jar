@@ -371,3 +371,162 @@ body {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+/* ---------- 图鉴 ---------- */
+
+#codex {
+  position: absolute;
+  inset: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(5, 14, 16, 0.96);
+  border: 1px solid rgba(126, 230, 205, 0.22);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+#codex.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.codex-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #b8f4e4;
+}
+
+#codex-close {
+  color: rgba(223, 243, 238, 0.5);
+  cursor: pointer;
+}
+
+#codex-close:hover {
+  color: rgba(223, 243, 238, 0.9);
+}
+
+#codex-count {
+  font-size: 9px;
+  color: var(--dim);
+}
+
+#codex-slots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+
+#codex-slots .slot {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 6px 8px;
+  min-height: 46px;
+}
+
+#codex-slots .slot b {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  margin-bottom: 3px;
+  color: rgba(223, 243, 238, 0.55);
+}
+
+#codex-slots .slot i {
+  display: block;
+  font-style: normal;
+  font-size: 8px;
+  line-height: 1.45;
+  color: rgba(223, 243, 238, 0.42);
+}
+
+#codex-slots .slot em {
+  position: absolute;
+  right: 6px;
+  top: 5px;
+  font-style: normal;
+  font-size: 8px;
+  color: rgba(223, 243, 238, 0.5);
+}
+
+#codex-slots .slot.got {
+  border-color: rgba(150, 255, 232, 0.4);
+  background: rgba(126, 230, 205, 0.07);
+}
+
+#codex-slots .slot.got b {
+  color: #9df2dc;
+}
+
+.codex-sec {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: rgba(223, 243, 238, 0.5);
+  margin-top: 3px;
+}
+
+#codex-gens {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#codex-gens .gen-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 9.5px;
+  padding: 5px 7px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+#codex-gens .gen-row:hover {
+  background: rgba(126, 230, 205, 0.1);
+  border-color: var(--line);
+}
+
+#codex-gens .gen-row b {
+  font-weight: 500;
+  color: #b8f4e4;
+}
+
+#codex-gens .sp {
+  color: #9df2dc;
+}
+
+#codex-gens .rng {
+  font-size: 8.5px;
+  color: rgba(223, 243, 238, 0.45);
+}
+
+#codex-gens .hrs {
+  margin-left: auto;
+  color: rgba(223, 243, 238, 0.6);
+}
+
+#codex-gens .mk {
+  font-size: 8px;
+  color: rgba(255, 208, 150, 0.8);
+}
+
+#codex-gens .gen-empty {
+  font-size: 9px;
+  color: rgba(223, 243, 238, 0.4);
+  padding: 4px 2px;
+}
+
+#menu .item.disabled {
+  color: rgba(223, 243, 238, 0.32);
+}

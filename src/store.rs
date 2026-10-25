@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Agg, Eco, Genome};
+use crate::model::{Agg, Eco, EcoVisual, Genome};
 use crate::signature::Bucket;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,6 +58,15 @@ pub struct Persisted {
     /// 当前代的名字(自动命名在 M2,之前为空)。
     #[serde(default)]
     pub creature_name: Option<String>,
+    /// 已锁定的物种 id(None = 未定型)。
+    #[serde(default)]
+    pub species: Option<String>,
+    /// 这一代孢子落缸的日期(收集档案用)。
+    #[serde(default)]
+    pub started_on: Option<String>,
+    /// 这一代累计的休息次数。
+    #[serde(default)]
+    pub gen_breaks: Option<u32>,
 }
 
 impl Persisted {
@@ -97,6 +106,9 @@ impl Default for Persisted {
             genome: None,
             agg: None,
             creature_name: None,
+            species: None,
+            started_on: None,
+            gen_breaks: None,
         }
     }
 }
@@ -127,6 +139,27 @@ pub fn data_root() -> PathBuf {
 
 pub struct Store {
     dir: PathBuf,
+}
+
+/// 一代生物收集后的档案,写入 generations/gen-N.json,只增不改。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GenerationRecord {
+    pub gen: u32,
+    pub name: String,
+    pub species_id: String,
+    pub species_name: String,
+    pub archetype: String,
+    pub full_bloom: bool,
+    pub from: String,
+    pub to: String,
+    pub active_min: f64,
+    pub focus_min: f64,
+    pub breaks: u32,
+    pub days: u32,
+    pub marks: Vec<String>,
+    pub genome: Genome,
+    pub agg: Agg,
+    pub visual: EcoVisual,
 }
 
 impl Store {
@@ -219,6 +252,35 @@ impl Store {
             let _ = fs::rename(&path, self.dir.join(format!("state.{stamp}.bak.json")));
         }
     }
+
+    fn generations_dir(&self) -> PathBuf {
+        self.dir.join("generations")
+    }
+
+    pub fn save_generation(&self, r: &GenerationRecord) {
+        let dir = self.generations_dir();
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(text) = serde_json::to_string_pretty(r) {
+            let _ = fs::write(dir.join(format!("gen-{}.json", r.gen)), text);
+        }
+    }
+
+    /// 按代数升序读回全部档案;解析失败的单条跳过。
+    pub fn load_generations(&self) -> Vec<GenerationRecord> {
+        let Ok(entries) = fs::read_dir(self.generations_dir()) else {
+            return Vec::new();
+        };
+        let mut v: Vec<GenerationRecord> = entries
+            .flatten()
+            .filter_map(|e| {
+                fs::read_to_string(e.path())
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+            })
+            .collect();
+        v.sort_by_key(|r| r.gen);
+        v
+    }
 }
 
 #[derive(Deserialize)]
@@ -309,5 +371,40 @@ mod tests {
         assert_eq!(q.genome.unwrap().seed, 777);
         assert_eq!(q.agg.unwrap().days, 1);
         assert_eq!(q.creature_name.as_deref(), Some("初代"));
+    }
+
+    #[test]
+    fn generation_records_roundtrip() {
+        let store = temp_store("gens");
+        let mut r = GenerationRecord {
+            gen: 1,
+            name: "第 1 代".into(),
+            species_id: "night".into(),
+            species_name: "夜洄种".into(),
+            archetype: "fish".into(),
+            full_bloom: true,
+            from: "2026-11-01".into(),
+            to: "2026-11-12".into(),
+            active_min: 930.0,
+            focus_min: 380.0,
+            breaks: 21,
+            days: 11,
+            marks: vec!["初代".into()],
+            genome: Genome::from_seed(5),
+            agg: Agg::neutral(),
+            visual: EcoVisual::from(&Eco::default()),
+        };
+        store.save_generation(&r);
+        r.gen = 2; // 第二条
+        r.species_id = "dawn".into();
+        store.save_generation(&r);
+
+        let gens = store.load_generations();
+        assert_eq!(gens.len(), 2);
+        assert_eq!(gens[0].gen, 1);
+        assert_eq!(gens[0].species_id, "night");
+        assert_eq!(gens[1].gen, 2);
+        assert!(gens[0].full_bloom);
+        assert!(!gens[1].marks.is_empty());
     }
 }

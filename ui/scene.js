@@ -39,6 +39,7 @@ const Scene = (() => {
   let bubbles = [];
   let reaction = 0;
   let renderScale = 1;
+  let curArch = 'medusa';
 
   const mix = (a, b, t) => a + (b - a) * t;
   const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a < 0 ? 0 : a})`;
@@ -255,7 +256,10 @@ const Scene = (() => {
   /// 繁盛阶段的共生小体：围绕主体缓慢公转，用细丝连着。
   function drawSatellites(t, c, p, tr, front) {
     const m = c.m || 0;
-    const count = Math.min(5, Math.max(0, Math.floor((m - 2.3) * 3)));
+    const count = Math.max(
+      0,
+      Math.min(6, Math.floor((m - 2.3) * 3) + ((c.genome && c.genome.satellites_bias) || 0))
+    );
     if (!count) return;
     for (let i = 0; i < count; i++) {
       const isFront = i % 2 === 0;
@@ -290,11 +294,13 @@ const Scene = (() => {
 
   function pose(t, st) {
     const tr = st.traits;
-    // 成熟度 0..4：阶段 + 阶段内进度，形态连续过渡而不是跳变。
+    const g = st.genome || DEFAULT_GENOME;
+    // 成熟度 0..4:阶段 + 阶段内进度,形态连续过渡而不是跳变。
     const m = (st.stage || 0) + (st.growth || 0);
     const base =
       BODY_UNIT *
       (0.62 + 0.16 * m) *
+      (g.size || 1) *
       (1 + 0.035 * Math.sin(t * 1.7) + reaction * 0.16);
     return {
       x: CX + Math.sin(t * 0.21) * 15 * tr.motility + Math.sin(t * 0.07) * 5,
@@ -302,10 +308,12 @@ const Scene = (() => {
       r: base,
       stage: st.stage,
       m,
+      genome: g,
     };
   }
 
-  function blob(x, y, r, t, wob) {
+  function blob(x, y, r, t, wob, g) {
+    const w = (g && g.wob) || [0.55, 0.32, 0.2];
     const N = 64;
     ctx.beginPath();
     for (let i = 0; i <= N; i++) {
@@ -313,9 +321,9 @@ const Scene = (() => {
       const k =
         1 +
         wob *
-          (0.55 * Math.sin(3 * a + t * 0.7) +
-            0.32 * Math.sin(5 * a - t * 0.95) +
-            0.2 * Math.sin(2 * a + t * 0.4));
+          (w[0] * Math.sin(3 * a + t * 0.7) +
+            w[1] * Math.sin(5 * a - t * 0.95) +
+            w[2] * Math.sin(2 * a + t * 0.4));
       const px = x + Math.cos(a) * r * k;
       const py = y + Math.sin(a) * r * k;
       if (i === 0) ctx.moveTo(px, py);
@@ -326,7 +334,10 @@ const Scene = (() => {
 
   function drawCilia(t, c, p, tr, front) {
     const m = c.m || 0;
-    const n = Math.round(6 + 2.4 * m);
+    const n = Math.max(
+      4,
+      Math.min(16, Math.round(6 + 2.4 * m) + ((c.genome && c.genome.cilia_bias) || 0))
+    );
     const grow = 0.32 + 0.11 * m;
     const fork = Math.max(0, Math.min(1, (m - 1.8) / 1.4));
     ctx.save();
@@ -390,7 +401,7 @@ const Scene = (() => {
       ctx.strokeStyle = rgba(p.accent, 0.14 * shell);
       ctx.stroke();
     }
-    blob(c.x, c.y, c.r, t, 0.03 + 0.022 * Math.min(m, 3));
+    blob(c.x, c.y, c.r, t, 0.03 + 0.022 * Math.min(m, 3), c.genome);
     const bodyGrad = ctx.createRadialGradient(
       c.x - c.r * 0.35,
       c.y - c.r * 0.4,
@@ -410,13 +421,14 @@ const Scene = (() => {
     ctx.stroke();
 
     // 内侧薄膜
-    blob(c.x, c.y, c.r * 0.82, t + 1.7, 0.05);
+    blob(c.x, c.y, c.r * 0.82, t + 1.7, 0.05, c.genome);
     ctx.lineWidth = 0.9;
     ctx.strokeStyle = rgba([255, 255, 250], 0.1 + 0.1 * tr.vitality);
     ctx.stroke();
 
     // 液泡：成熟之后才出现
-    const vac = Math.min(3, Math.max(0, Math.floor(m - 0.6)));
+    const vcap = (c.genome && c.genome.vacuoles) || 3;
+    const vac = Math.min(vcap, Math.max(0, Math.floor(m - 0.6)));
     for (let i = 0; i < vac; i++) {
       const a = 1.2 + i * 2.1 + Math.sin(t * 0.3 + i) * 0.2;
       const rr = c.r * (0.28 + 0.12 * i);
@@ -519,6 +531,334 @@ const Scene = (() => {
     ctx.restore();
   }
 
+  /* ---------- 流线型(晨光种/夜洄种) ---------- */
+
+  // 物种专属色调:晨光种金侧线、夜洄种蓝紫节段。
+  const SPECIES_TINT = {
+    dawn: [248, 214, 148],
+    night: [148, 162, 240],
+  };
+
+  const fishState = { x: CX - 30, y: CY + 16, vx: 16, vy: 2, tx: CX, ty: CY, dart: 0 };
+
+  function fishPose(t, st, dt) {
+    const g = st.genome || DEFAULT_GENOME;
+    const m = (st.stage || 0) + (st.growth || 0);
+    const motility = (st.traits && st.traits.motility) || 0.5;
+    dt = dt || dtDraw;
+    fishState.dart = Math.max(0, fishState.dart - dt * 1.1);
+    // 目标点缓慢游走,速度转向积分,朝向跟随速度——"游"而不是"漂"。
+    fishState.tx = CX + Math.sin(t * 0.23) * 54 + Math.sin(t * 0.07) * 18;
+    fishState.ty = CY + Math.cos(t * 0.19) * 36 + Math.sin(t * 0.53) * 10;
+    const sp = (15 + 11 * motility) * (1 + 2.8 * fishState.dart);
+    let ax = (fishState.tx - fishState.x) * 1.2 - fishState.vx * 0.85;
+    let ay = (fishState.ty - fishState.y) * 1.2 - fishState.vy * 0.85;
+    const al = Math.hypot(ax, ay) || 1;
+    const am = Math.min(al, 46);
+    fishState.vx += (ax / al) * am * dt;
+    fishState.vy += (ay / al) * am * dt;
+    const vl = Math.hypot(fishState.vx, fishState.vy) || 1;
+    const vv = Math.min(vl, sp);
+    fishState.vx = (fishState.vx / vl) * vv;
+    fishState.vy = (fishState.vy / vl) * vv;
+    fishState.x += fishState.vx * dt;
+    fishState.y += fishState.vy * dt;
+    const dx = fishState.x - CX;
+    const dy = fishState.y - CY;
+    const dd = Math.hypot(dx, dy);
+    if (dd > RW - 18) {
+      const k = (RW - 18) / dd;
+      fishState.x = CX + dx * k;
+      fishState.y = CY + dy * k;
+      fishState.vx *= 0.5;
+      fishState.vy *= 0.5;
+    }
+    return {
+      x: fishState.x,
+      y: fishState.y,
+      r: BODY_UNIT * (0.6 + 0.13 * m) * (g.size || 1),
+      m,
+      heading: Math.atan2(fishState.vy, fishState.vx),
+      genome: g,
+      tint: SPECIES_TINT[st.species_id] || null,
+      dart: fishState.dart,
+    };
+  }
+
+  function drawFishBody(t, c, p, tr) {
+    const L = c.r * 1.75;
+    const Wd = c.r * 0.72;
+    const col = c.tint || p.body;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.heading);
+    // 尾鳍(急冲时摆得更快)
+    const tw = Math.sin(t * (8 + 6 * c.dart)) * Wd * 0.6;
+    ctx.beginPath();
+    ctx.moveTo(-L * 0.62, 0);
+    ctx.quadraticCurveTo(-L * 0.95, -Wd * 0.55 + tw, -L * 1.22, -Wd * 0.8 + tw * 1.5);
+    ctx.quadraticCurveTo(-L * 1.0, tw * 0.4, -L * 1.22, Wd * 0.8 + tw * 1.5);
+    ctx.quadraticCurveTo(-L * 0.95, Wd * 0.55 + tw, -L * 0.62, 0);
+    ctx.fillStyle = rgba(p.accent, 0.5);
+    ctx.fill();
+    // 背鳍
+    ctx.beginPath();
+    ctx.moveTo(-L * 0.12, -Wd * 0.9);
+    ctx.quadraticCurveTo(L * 0.04, -Wd * 1.45, L * 0.3, -Wd * 0.75);
+    ctx.closePath();
+    ctx.fillStyle = rgba(col, 0.4);
+    ctx.fill();
+    // 身体
+    const bgd = ctx.createRadialGradient(L * 0.3, -Wd * 0.2, Wd * 0.1, 0, 0, L * 0.8);
+    bgd.addColorStop(0, rgba([col[0] + 36, col[1] + 20, col[2] + 20], 0.92));
+    bgd.addColorStop(0.6, rgba(col, 0.68));
+    bgd.addColorStop(1, rgba(p.accent, 0.4));
+    ctx.beginPath();
+    ctx.ellipse(0, 0, L * 0.72, Wd, 0, 0, TAU);
+    ctx.fillStyle = bgd;
+    ctx.fill();
+    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = rgba(col, 0.5 + 0.25 * tr.vitality);
+    ctx.stroke();
+    // 侧线光带:晨光种金色 / 夜洄种蓝紫
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    ctx.moveTo(-L * 0.58, 0);
+    ctx.lineTo(L * 0.55, 0);
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Wd * 0.3;
+    ctx.strokeStyle = rgba(col, 0.22 + 0.5 * (tr.glow || 0));
+    ctx.stroke();
+    ctx.restore();
+    // 眼
+    ctx.beginPath();
+    ctx.arc(L * 0.46, -Wd * 0.16, Wd * 0.15, 0, TAU);
+    ctx.fillStyle = 'rgba(10,20,18,0.85)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(L * 0.49, -Wd * 0.2, Wd * 0.05, 0, TAU);
+    ctx.fillStyle = 'rgba(255,255,250,0.8)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---------- 群游型(群游种) ---------- */
+
+  const schoolState = { fishes: [], target: { x: CX, y: CY }, phase: 0, flash: 0, scatter: 0 };
+
+  function ensureSchool(n) {
+    while (schoolState.fishes.length < n) {
+      const a = Math.random() * TAU;
+      schoolState.fishes.push({
+        x: CX + Math.cos(a) * 30 * Math.random(),
+        y: CY + Math.sin(a) * 30 * Math.random(),
+        vx: 20 * (Math.random() - 0.5),
+        vy: 20 * (Math.random() - 0.5),
+        s: 0.8 + Math.random() * 0.4,
+      });
+    }
+  }
+
+  function schoolPose(t, st, dt) {
+    const g = st.genome || DEFAULT_GENOME;
+    const m = (st.stage || 0) + (st.growth || 0);
+    const motility = (st.traits && st.traits.motility) || 0.5;
+    dt = dt || dtDraw;
+    ensureSchool(6);
+    schoolState.flash = Math.max(0, schoolState.flash - dt * 1.4);
+    schoolState.scatter = Math.max(0, schoolState.scatter - dt * 0.8);
+    schoolState.phase += dt;
+    // 每隔几秒整群换向:换向瞬间集体闪光。
+    if (schoolState.phase > 6) {
+      schoolState.phase = 0;
+      schoolState.flash = 1;
+      const a = Math.random() * TAU;
+      const rr = 20 + Math.random() * (RW - 40);
+      schoolState.target = { x: CX + Math.cos(a) * rr, y: CY + Math.sin(a) * rr * 0.85 };
+    }
+    const fishes = schoolState.fishes;
+    let cx0 = 0;
+    let cy0 = 0;
+    for (const f of fishes) {
+      cx0 += f.x;
+      cy0 += f.y;
+    }
+    cx0 /= fishes.length;
+    cy0 /= fishes.length;
+    const maxV = (26 + 16 * motility) * (0.7 + 0.1 * m);
+    for (const f of fishes) {
+      let ax = (schoolState.target.x - f.x) * 0.9;
+      let ay = (schoolState.target.y - f.y) * 0.9;
+      for (const o of fishes) {
+        if (o === f) continue;
+        const dx = f.x - o.x;
+        const dy = f.y - o.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 200 && d2 > 0.01) {
+          const d = Math.sqrt(d2);
+          ax += (dx / d) * (14 - d) * 1.6;
+          ay += (dy / d) * (14 - d) * 1.6;
+        }
+      }
+      if (schoolState.scatter > 0.01) {
+        const dx = f.x - cx0;
+        const dy = f.y - cy0;
+        const d = Math.hypot(dx, dy) || 1;
+        ax += (dx / d) * 220 * schoolState.scatter;
+        ay += (dy / d) * 220 * schoolState.scatter;
+      }
+      f.vx += ax * dt;
+      f.vy += ay * dt;
+      const vl = Math.hypot(f.vx, f.vy) || 1;
+      const vv = Math.min(vl, maxV);
+      f.vx = (f.vx / vl) * vv;
+      f.vy = (f.vy / vl) * vv;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      const dx = f.x - CX;
+      const dy = f.y - CY;
+      const dd = Math.hypot(dx, dy);
+      if (dd > RW - 12) {
+        const k = (RW - 12) / dd;
+        f.x = CX + dx * k;
+        f.y = CY + dy * k;
+        f.vx *= 0.7;
+        f.vy *= 0.7;
+      }
+    }
+    return {
+      x: cx0,
+      y: cy0,
+      r: BODY_UNIT * 0.85 * (g.size || 1),
+      m,
+      fishes,
+      flash: schoolState.flash,
+      genome: g,
+    };
+  }
+
+  function drawMiniFish(t, f, p, tr, extraA) {
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(Math.atan2(f.vy, f.vx));
+    const L = 6.5 * f.s;
+    const Wd = 2.6 * f.s;
+    const tw = Math.sin(t * 11 + f.s * 9) * Wd * 0.8;
+    ctx.beginPath();
+    ctx.moveTo(-L, 0);
+    ctx.lineTo(-L * 1.7, -Wd * 1.1 + tw);
+    ctx.lineTo(-L * 1.5, tw * 0.5);
+    ctx.lineTo(-L * 1.7, Wd * 1.1 + tw);
+    ctx.closePath();
+    ctx.fillStyle = rgba(p.accent, 0.45 * extraA);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, L, Wd, 0, 0, TAU);
+    ctx.fillStyle = rgba(p.body, 0.8 * extraA);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---------- 辐射型(沉玉种) ---------- */
+
+  const starState = { x: CX - 36, dir: 1, curl: [0, 0, 0, 0, 0], pause: 0 };
+
+  function starPose(t, st, dt) {
+    const g = st.genome || DEFAULT_GENOME;
+    const m = (st.stage || 0) + (st.growth || 0);
+    const motility = (st.traits && st.traits.motility) || 0.5;
+    dt = dt || dtDraw;
+    for (let i = 0; i < 5; i++) starState.curl[i] *= Math.max(0, 1 - dt * 1.6);
+    starState.pause -= dt;
+    if (starState.pause <= 0) {
+      starState.x += starState.dir * (2.4 + 3.2 * motility) * dt;
+      if (starState.x > CX + RW * 0.58) starState.dir = -1;
+      if (starState.x < CX - RW * 0.58) starState.dir = 1;
+      if (Math.sin(t * 0.17) > 0.989) starState.pause = 2 + Math.random() * 3;
+    }
+    return {
+      x: starState.x,
+      y: CY + RW * 0.72 + Math.sin(t * 0.7) * 1.4,
+      r: BODY_UNIT * (0.5 + 0.12 * m) * (g.size || 1),
+      m,
+      heading: starState.dir > 0 ? 0 : Math.PI,
+      curl: starState.curl,
+      genome: g,
+    };
+  }
+
+  function drawStarBody(t, c, p, tr) {
+    const n = 5;
+    const base = c.heading;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    // 五条腕:中间那条朝前进方向
+    for (let i = 0; i < n; i++) {
+      const a = base + (i - 2) * (TAU / n) + Math.sin(t * 0.5 + i * 1.3) * 0.07;
+      const curl = c.curl[i] || 0;
+      const len = c.r * 1.42 * (0.92 + 0.08 * Math.sin(t * 0.8 + i)) * (1 - 0.42 * curl);
+      const px = Math.cos(a + Math.PI / 2) * c.r * 0.3;
+      const py = Math.sin(a + Math.PI / 2) * c.r * 0.3;
+      const tipX = Math.cos(a + curl * 0.9) * len;
+      const tipY = Math.sin(a + curl * 0.9) * len;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * c.r * 0.3 + px, Math.sin(a) * c.r * 0.3 + py);
+      ctx.quadraticCurveTo(
+        Math.cos(a) * len * 0.55 + px * 0.4,
+        Math.sin(a) * len * 0.55 + py * 0.4,
+        tipX,
+        tipY
+      );
+      ctx.quadraticCurveTo(
+        Math.cos(a) * len * 0.55 - px * 0.4,
+        Math.sin(a) * len * 0.55 - py * 0.4,
+        Math.cos(a) * c.r * 0.3 - px,
+        Math.sin(a) * c.r * 0.3 - py
+      );
+      ctx.closePath();
+      ctx.fillStyle = rgba(p.body, 0.6 + 0.15 * tr.vitality);
+      ctx.fill();
+      ctx.lineWidth = 0.8;
+      ctx.strokeStyle = rgba(p.body, 0.55);
+      ctx.stroke();
+    }
+    // 中心体盘
+    blob(0, 0, c.r * 0.55, t, 0.05, c.genome);
+    ctx.fillStyle = rgba(p.body, 0.78);
+    ctx.fill();
+    ctx.strokeStyle = rgba(p.accent, 0.4);
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+    // 腕尖五点微光(沉玉种的光语言)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < n; i++) {
+      const a = base + (i - 2) * (TAU / n) + Math.sin(t * 0.5 + i * 1.3) * 0.07;
+      const curl = c.curl[i] || 0;
+      const len = c.r * 1.42 * (1 - 0.42 * curl);
+      const pulse = 0.5 + 0.5 * Math.sin(t * 1.4 + i * 1.9);
+      drawSprite(
+        Math.cos(a + curl * 0.9) * len,
+        Math.sin(a + curl * 0.9) * len,
+        8 + pulse * 6,
+        (0.3 + 0.5 * (tr.glow || 0)) * pulse
+      );
+    }
+    ctx.restore();
+    // 压力斑
+    if (tr.spots > 0.04) {
+      for (let i = 0; i < 4; i++) {
+        const a = i * 1.9 + 0.7;
+        ctx.fillStyle = `rgba(46,58,44,${tr.spots * 0.4})`;
+        ctx.beginPath();
+        ctx.ellipse(Math.cos(a) * c.r * 0.4, Math.sin(a) * c.r * 0.4, 2, 1.5, a, 0, TAU);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   /* ---------- 图纸注册表 ---------- */
 
   const Archetypes = {
@@ -538,6 +878,60 @@ const Scene = (() => {
         drawSatellites(t, c, p, tr, true);
       },
     },
+    // 流线型:全域巡游,朝向跟随速度;点击急冲(晨光种/夜洄种)。
+    fish: {
+      pose: fishPose,
+      react() {
+        fishState.dart = 1;
+      },
+      drawBack(t, c, p, tr) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        drawSprite(c.x, c.y, c.r * 4.6, 0.16 + 0.4 * (tr.glow || 0));
+        ctx.restore();
+      },
+      drawMain: drawFishBody,
+      drawFront() {},
+    },
+    // 群游型:6 条小鱼简化群集,整群周期性换向闪光;点击惊散(群游种)。
+    school: {
+      pose: schoolPose,
+      react() {
+        schoolState.scatter = 1;
+      },
+      drawBack(t, c, p, tr) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        drawSprite(c.x, c.y, c.r * 6, (0.14 + 0.3 * (tr.glow || 0)) * (1 + 0.7 * c.flash));
+        ctx.restore();
+      },
+      drawMain(t, c, p, tr) {
+        const a = 0.85 + 0.15 * c.flash;
+        for (const f of c.fishes) drawMiniFish(t, f, p, tr, a);
+        if (c.flash > 0.25) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          for (const f of c.fishes) drawSprite(f.x, f.y, 10, 0.3 * c.flash);
+          ctx.restore();
+        }
+      },
+      drawFront() {},
+    },
+    // 辐射型:底栖极慢爬行,腕尖五点微光;点击单腕卷曲(沉玉种)。
+    star: {
+      pose: starPose,
+      react() {
+        starState.curl[(Math.random() * 5) | 0] = 1;
+      },
+      drawBack(t, c, p, tr) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        drawSprite(c.x, c.y, c.r * 3.4, 0.1 + 0.3 * (tr.glow || 0));
+        ctx.restore();
+      },
+      drawMain: drawStarBody,
+      drawFront() {},
+    },
   };
 
   /* ---------- 主循环 ---------- */
@@ -545,13 +939,19 @@ const Scene = (() => {
   function frame(ts, st, dt) {
     if (!ctx || !st) return;
     const t = ts / 1000;
-    const tr = st.traits;
-    const p = palette(tr.hue);
+    const tr = st.traits || {};
+    const spec = {
+      ...st,
+      genome: st.genome || DEFAULT_GENOME,
+      archetype: st.archetype || 'medusa',
+    };
+    const hue = (tr.hue || 0) + (spec.genome.hue_bias || 0);
+    const p = palette(hue);
     reaction = Math.max(0, reaction - dt * 2.2);
 
     ensureSprite(p);
 
-    const key = `${tr.hue.toFixed(2)}|${tr.turbidity.toFixed(2)}|${tr.glow.toFixed(2)}|${dpr}`;
+    const key = `${hue.toFixed(2)}|${(tr.turbidity || 0).toFixed(2)}|${(tr.glow || 0).toFixed(2)}|${dpr}`;
     if (key !== bgKey) {
       bgKey = key;
       buildBackground(p, tr);
@@ -565,15 +965,11 @@ const Scene = (() => {
     ctx.arc(CX, CY, RW, 0, TAU);
     ctx.clip();
 
-    drawCaustics(t, p, tr.glow);
+    drawCaustics(t, p, tr.glow || 0);
 
-    const spec = {
-      ...st,
-      genome: st.genome || DEFAULT_GENOME,
-      archetype: st.archetype || 'medusa',
-    };
     const arch = Archetypes[spec.archetype] || Archetypes.medusa;
-    const c = arch.pose(t, spec);
+    curArch = spec.archetype in Archetypes ? spec.archetype : 'medusa';
+    const c = arch.pose(t, spec, dt || dtDraw);
     drawMotes(t, p, tr, c.m);
 
     arch.drawBack(t, c, p, tr);
@@ -604,6 +1000,8 @@ const Scene = (() => {
 
   function react() {
     reaction = 1;
+    const a = Archetypes[curArch];
+    if (a && a.react) a.react();
   }
 
   return { init, frame, burst, react, setScale };

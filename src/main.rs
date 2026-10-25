@@ -5,6 +5,7 @@ mod logging;
 mod model;
 mod sensor;
 mod signature;
+mod species;
 mod store;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -26,6 +27,9 @@ const WIN_W: f64 = 224.0;
 const WIN_H: f64 = 300.0;
 /// 收进小圆点时的窗口尺寸。
 const DOCK_SIZE: f64 = 40.0;
+/// 图鉴面板打开时临时放大的窗口尺寸(关闭恢复)。
+const CODEX_W: f64 = 340.0;
+const CODEX_H: f64 = 460.0;
 
 /// 培养皿的几何中心与半径（逻辑像素，未缩放），用于点击穿透的命中测试。
 const DISH_CX: f64 = 112.0;
@@ -101,6 +105,13 @@ struct TraitsView {
 }
 
 #[derive(Serialize, Clone)]
+struct SpeciesView {
+    id: String,
+    name: String,
+    archetype: String,
+}
+
+#[derive(Serialize, Clone)]
 struct Snapshot {
     stage: u8,
     stage_name: String,
@@ -136,6 +147,10 @@ struct Snapshot {
     archetype: String,
     genome: Genome,
     creature_name: String,
+    /// 显形后锁定的物种;None = 未定型(按通用浮伞形态渲染)。
+    species: Option<SpeciesView>,
+    /// 是否已可收集(成体起)。
+    can_collect: bool,
 }
 
 struct Inner {
@@ -169,6 +184,11 @@ struct Inner {
     agg: Agg,
     generation: u32,
     creature_name: Option<String>,
+    /// 世代制(M1):显形物种、落缸日期、累计休息、演示自动收集计时。
+    species: Option<&'static species::SpeciesDef>,
+    started_on: String,
+    gen_breaks: u32,
+    demo_bloom_sim: u64,
 }
 
 struct TrayHandles {
@@ -182,6 +202,7 @@ struct AppState {
     menu_open: AtomicBool,
     hover_now: AtomicBool,
     diag_open: AtomicBool,
+    codex_open: AtomicBool,
     ui_scale_bits: AtomicU32,
     collapsed: AtomicBool,
     store: Store,
@@ -243,12 +264,22 @@ impl AppState {
             opacity: inner.opacity,
             collapsed: inner.collapsed,
             generation: inner.generation,
-            archetype: "medusa".to_string(),
+            archetype: inner
+                .species
+                .map(|d| d.archetype)
+                .unwrap_or("medusa")
+                .to_string(),
             genome: inner.genome.clone(),
             creature_name: inner
                 .creature_name
                 .clone()
                 .unwrap_or_else(|| format!("第 {} 代", inner.generation)),
+            species: inner.species.map(|d| SpeciesView {
+                id: d.id.to_string(),
+                name: d.name.to_string(),
+                archetype: d.archetype.to_string(),
+            }),
+            can_collect: inner.eco.stage >= 2,
         }
     }
 }
@@ -441,6 +472,9 @@ fn reset_jar(app: AppHandle, state: State<AppState>) {
         // 重置 = 重新开始这一代:换一只新生物,代数不前进(不计入图鉴)。
         inner.genome = Genome::random();
         inner.agg = Agg::neutral();
+        inner.species = None;
+        inner.started_on = local_date_key();
+        inner.gen_breaks = 0;
         inner.day_active_sec = 0;
         inner.day_breaks = 0;
         let snap = state.snapshot_at(&inner, now_ms());
@@ -460,6 +494,130 @@ fn set_autostart(enabled: bool, app: AppHandle, state: State<AppState>) -> u8 {
 fn set_preview_stage(stage: Option<u8>, state: State<AppState>) {
     let mut inner = state.inner.lock().unwrap();
     inner.preview_stage = stage.map(|s| s.min(3));
+}
+
+/// 收集核心:把当前代归档成 GenerationRecord,并把生态重置为下一代孢子。
+/// 上游需保证 stage >= 2(可收集)。
+fn perform_collect(inner: &mut Inner, now: u64, today: &str) -> store::GenerationRecord {
+    let def = inner
+        .species
+        .unwrap_or(&species::SPECIES[species::best(&inner.agg)]);
+    let full_bloom = inner.eco.stage >= 3;
+    let mut marks = Vec::new();
+    if inner.generation == 1 {
+        marks.push("初代".to_string());
+    }
+    if !full_bloom {
+        marks.push("提前收集".to_string());
+    }
+    let rec = store::GenerationRecord {
+        gen: inner.generation,
+        name: inner
+            .creature_name
+            .clone()
+            .unwrap_or_else(|| format!("第 {} 代", inner.generation)),
+        species_id: def.id.to_string(),
+        species_name: def.name.to_string(),
+        archetype: def.archetype.to_string(),
+        full_bloom,
+        from: inner.started_on.clone(),
+        to: today.to_string(),
+        active_min: inner.eco.active_minutes,
+        focus_min: inner.eco.focus_minutes,
+        breaks: inner.gen_breaks,
+        days: inner.agg.days,
+        marks,
+        genome: inner.genome.clone(),
+        agg: inner.agg.clone(),
+        visual: model::EcoVisual::from(&inner.eco),
+    };
+
+    let scale = inner.eco.stage_scale;
+    inner.tracker = Tracker::default();
+    inner.eco = Eco::default();
+    inner.eco.stage_scale = scale;
+    inner.eco.last_tick_ms = now;
+    inner.eco.last_break_ms = now;
+    inner.sig = Signature::default();
+    inner.agg = Agg::neutral();
+    inner.genome = Genome::random();
+    inner.species = None;
+    inner.generation += 1;
+    inner.creature_name = None;
+    inner.started_on = today.to_string();
+    inner.gen_breaks = 0;
+    rec
+}
+
+/// 收集当前这一代:归档 → 下一代孢子落缸。
+#[tauri::command]
+fn collect_creature(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<serde_json::Value, String> {
+    let now = now_ms();
+    let today = local_date_key();
+    let rec;
+    {
+        let mut inner = state.inner.lock().unwrap();
+        if inner.eco.stage < 2 {
+            return Err("它还没有定形,再陪它一阵".into());
+        }
+        rec = perform_collect(&mut inner, now, &today);
+        state.store.save_generation(&rec);
+    }
+    logging::write(&format!(
+        "collected gen={} species={} full_bloom={}",
+        rec.gen, rec.species_id, rec.full_bloom
+    ));
+    let _ = app.emit("collected", rec.species_name.clone());
+    save_now(&app, &state);
+    Ok(serde_json::json!({
+        "gen": rec.gen,
+        "name": rec.name,
+        "species": rec.species_name,
+        "full_bloom": rec.full_bloom,
+    }))
+}
+
+/// 图鉴:物种槽位(含暗示) + 历代档案。
+#[tauri::command]
+fn get_codex(state: State<AppState>) -> serde_json::Value {
+    let gens = state.store.load_generations();
+    let slots: Vec<serde_json::Value> = species::SPECIES
+        .iter()
+        .map(|d| {
+            let count = gens.iter().filter(|g| g.species_id == d.id).count() as u32;
+            serde_json::json!({
+                "id": d.id, "name": d.name, "archetype": d.archetype,
+                "hint": d.hint, "collected": count > 0, "count": count,
+            })
+        })
+        .collect();
+    let briefs: Vec<serde_json::Value> = gens
+        .iter()
+        .map(|g| serde_json::to_value(g).unwrap_or_default())
+        .collect();
+    serde_json::json!({ "slots": slots, "generations": briefs })
+}
+
+/// 图鉴面板开合:临时放大/恢复窗口。点击穿透由前端另调 set_menu_open。
+#[tauri::command]
+fn set_codex(open: bool, app: AppHandle, state: State<AppState>) {
+    state.codex_open.store(open, Ordering::Relaxed);
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let (w, h) = if open {
+        (CODEX_W, CODEX_H)
+    } else {
+        let s = f32::from_bits(state.ui_scale_bits.load(Ordering::Relaxed));
+        window_size(s, state.collapsed.load(Ordering::Relaxed))
+    };
+    let _ = win.set_size(tauri::LogicalSize::new(w, h));
+    if open {
+        resize_and_clamp(&app);
+    }
 }
 
 #[tauri::command]
@@ -690,6 +848,9 @@ fn main() {
             set_ui_scale,
             set_opacity,
             set_collapsed,
+            set_codex,
+            get_codex,
+            collect_creature,
             tray_probe,
             tray_self_test,
             reset_jar,
@@ -736,6 +897,7 @@ fn main() {
 
             let mut eco = persisted.eco.clone();
             eco.apply_offline(now_ms());
+            eco.stage_scale = if demo { 0.1 } else { 1.0 };
 
             let ui_scale = persisted.ui_scale.unwrap_or(1.0).clamp(0.8, 1.25);
             let opacity = persisted.opacity.unwrap_or(1.0).clamp(0.5, 1.0);
@@ -760,6 +922,12 @@ fn main() {
             let agg = persisted.agg.clone().unwrap_or_else(|| Agg::estimated(&eco));
             let generation = persisted.generation.max(1);
             let creature_name = persisted.creature_name.clone();
+            let species_id = persisted.species.as_deref().and_then(species::by_id);
+            let started_on = persisted
+                .started_on
+                .clone()
+                .unwrap_or_else(|| today.clone());
+            let gen_breaks = persisted.gen_breaks.unwrap_or(0);
 
             let tray = build_tray(app, persisted.paused, autostart_state == 1)?;
 
@@ -792,10 +960,15 @@ fn main() {
                     agg,
                     generation,
                     creature_name,
+                    species: species_id,
+                    started_on,
+                    gen_breaks,
+                    demo_bloom_sim: 0,
                 }),
                 menu_open: AtomicBool::new(false),
                 hover_now: AtomicBool::new(false),
                 diag_open: AtomicBool::new(false),
+                codex_open: AtomicBool::new(false),
                 ui_scale_bits: AtomicU32::new(ui_scale.to_bits()),
                 collapsed: AtomicBool::new(collapsed),
                 store,
@@ -1062,18 +1235,19 @@ fn hover_loop(handle: AppHandle) {
         if !win.is_visible().unwrap_or(true) {
             continue;
         }
-        let (menu, scale, collapsed) = handle
+        let (menu, codex, scale, collapsed) = handle
             .try_state::<AppState>()
             .map(|s| {
                 (
                     s.menu_open.load(Ordering::Relaxed),
+                    s.codex_open.load(Ordering::Relaxed),
                     f32::from_bits(s.ui_scale_bits.load(Ordering::Relaxed)) as f64,
                     s.collapsed.load(Ordering::Relaxed),
                 )
             })
-            .unwrap_or((false, 1.0, false));
+            .unwrap_or((false, false, 1.0, false));
 
-        let inside = if menu || collapsed {
+        let inside = if menu || codex || collapsed {
             true
         } else {
             let (Ok(pos), Ok(win_scale)) = (win.outer_position(), win.scale_factor()) else {
@@ -1165,7 +1339,7 @@ fn tick_once(handle: &AppHandle) {
 
         let today = local_date_key();
         if inner.day_key != today {
-            inner.day_key = today;
+            inner.day_key = today.clone();
             inner.day_active_sec = 0;
             inner.day_breaks = 0;
             inner.agg.roll_day();
@@ -1197,6 +1371,35 @@ fn tick_once(handle: &AppHandle) {
             inner.last_wall = now;
         }
 
+        // 显形:成体起尝试锁定物种;到繁盛仍不定型则取最高分兜底。
+        if inner.species.is_none() && inner.eco.stage >= 2 {
+            let idx = if inner.eco.stage >= 3 {
+                Some(species::best(&inner.agg))
+            } else {
+                species::determine(&inner.agg)
+            };
+            if let Some(i) = idx {
+                let def = &species::SPECIES[i];
+                inner.species = Some(def);
+                logging::write(&format!(
+                    "species revealed: {} (gen {})",
+                    def.id, inner.generation
+                ));
+            }
+        }
+
+        // 演示模式:繁盛稳定展示约 25 秒后自动收集,循环走完整个世代。
+        if inner.demo && inner.eco.stage >= 3 && inner.species.is_some() {
+            inner.demo_bloom_sim += 1000;
+            if inner.demo_bloom_sim > 25_000 {
+                let rec = perform_collect(&mut inner, now, &today);
+                state.store.save_generation(&rec);
+                logging::write(&format!("demo auto-collected gen {}", rec.gen));
+            }
+        } else {
+            inner.demo_bloom_sim = 0;
+        }
+
         snap = state.snapshot_at(&inner, now);
         should_save = now.saturating_sub(inner.last_save) > 30_000;
     }
@@ -1220,6 +1423,7 @@ fn advance(inner: &mut Inner, store: &Store, now: u64, sample: &Sample, active: 
             Event::Break => {
                 inner.eco.last_break_ms = now;
                 inner.day_breaks += 1;
+                inner.gen_breaks += 1;
             }
         }
     }
@@ -1271,6 +1475,9 @@ fn save_now(handle: &AppHandle, state: &AppState) {
         genome: Some(inner.genome.clone()),
         agg: Some(inner.agg.clone()),
         creature_name: inner.creature_name.clone(),
+        species: inner.species.map(|d| d.id.to_string()),
+        started_on: Some(inner.started_on.clone()),
+        gen_breaks: Some(inner.gen_breaks),
     });
     inner.last_save = now_ms();
 }
@@ -1350,5 +1557,87 @@ mod platform {
             app: None,
             input: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inner_at_bloom() -> Inner {
+        let mut inner = Inner {
+            tracker: Tracker::default(),
+            eco: Eco::default(),
+            sig: Signature::default(),
+            paused: false,
+            demo: false,
+            demo_base: 0,
+            demo_elapsed: 0,
+            last_save: 0,
+            data_dir: String::new(),
+            last_active: true,
+            last_idle_ms: 0,
+            last_fg: None,
+            started_ms: 0,
+            last_wall: 0,
+            day_key: "2026-10-25".into(),
+            day_active_sec: 0,
+            day_breaks: 0,
+            autostart: false,
+            autostart_state: 0,
+            preview_stage: None,
+            ui_scale: 1.0,
+            opacity: 1.0,
+            collapsed: false,
+            genome: Genome::from_seed(42),
+            agg: Agg::neutral(),
+            generation: 1,
+            creature_name: None,
+            species: Some(&species::SPECIES[0]),
+            started_on: "2026-10-20".into(),
+            gen_breaks: 5,
+            demo_bloom_sim: 0,
+        };
+        inner.eco.active_minutes = 950.0;
+        inner.eco.stage = 3;
+        inner
+    }
+
+    #[test]
+    fn collect_archives_and_renews() {
+        let mut inner = inner_at_bloom();
+        let before_seed = inner.genome.seed;
+        let rec = perform_collect(&mut inner, 1_000_000, "2026-10-25");
+        assert_eq!(rec.gen, 1);
+        assert_eq!(rec.species_id, "deep_glow");
+        assert!(rec.full_bloom);
+        assert!(rec.marks.iter().any(|m| m == "初代"));
+        assert_eq!(rec.from, "2026-10-20");
+        assert_eq!(rec.to, "2026-10-25");
+        assert_eq!(rec.breaks, 5);
+        assert!((rec.active_min - 950.0).abs() < 0.001);
+
+        // 下一代是新孢子
+        assert_eq!(inner.generation, 2);
+        assert!(inner.species.is_none());
+        assert_eq!(inner.eco.active_minutes, 0.0);
+        assert_eq!(inner.eco.stage, 0);
+        assert_eq!(inner.started_on, "2026-10-25");
+        assert_eq!(inner.gen_breaks, 0);
+        assert_ne!(inner.genome.seed, before_seed);
+    }
+
+    #[test]
+    fn early_collect_marks_and_keeps_species() {
+        let mut inner = inner_at_bloom();
+        inner.eco.active_minutes = 320.0;
+        inner.eco.stage = 2;
+        inner.generation = 4;
+        let rec = perform_collect(&mut inner, 1_000_000, "2026-10-25");
+        assert!(!rec.full_bloom);
+        assert!(rec.marks.iter().any(|m| m == "提前收集"));
+        assert!(rec.marks.iter().all(|m| m != "初代"));
+        assert_eq!(rec.species_id, "deep_glow");
+        assert_eq!(inner.generation, 5);
     }
 }

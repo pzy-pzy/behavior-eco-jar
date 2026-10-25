@@ -61,6 +61,11 @@
       breaks: document.getElementById('d-breaks'),
       data: document.getElementById('d-data'),
     },
+    codex: document.getElementById('codex'),
+    codexCount: document.getElementById('codex-count'),
+    codexSlots: document.getElementById('codex-slots'),
+    codexGens: document.getElementById('codex-gens'),
+    codexClose: document.getElementById('codex-close'),
     bars: {
       focus: document.getElementById('b-focus'),
       rhythm: document.getElementById('b-rhythm'),
@@ -85,6 +90,13 @@
   let lastTs = 0;
   let lastDraw = 0;
   let dtDraw = 1 / 30;
+  let uiGenome = null;
+  let uiArch = 'medusa';
+  let uiSpeciesId = null;
+  let lastSpecies = null;
+  let codexOpen = false;
+  let previewSpec = null;
+  let previewUntil = 0;
 
   Scene.init(document.getElementById('stage'));
 
@@ -147,6 +159,24 @@
     applyDiag(!!s.diag_open, true);
     updateDiag(s);
 
+    // 世代:基因/图纸随快照下发,显形瞬间给提示。
+    uiGenome = s.genome || uiGenome;
+    uiArch = s.archetype || 'medusa';
+    uiSpeciesId = s.species ? s.species.id : null;
+    const sp = s.species || null;
+    if (sp && !lastSpecies) {
+      lastSpecies = sp;
+      toast('显形:' + sp.name);
+      Scene.burst(26);
+    }
+    if (!sp) lastSpecies = null;
+    tgt.can_collect = !!s.can_collect;
+    const collectItem = el.menu.querySelector('[data-act="collect"]');
+    if (collectItem) {
+      collectItem.textContent = s.can_collect ? '收集它' : '收集(未定形)';
+      collectItem.classList.toggle('disabled', !s.can_collect);
+    }
+
     hover = !!s.hover;
     syncCard();
   }
@@ -170,6 +200,121 @@
   } else {
     previewMode();
   }
+
+  /* ---------- 图鉴 ---------- */
+
+  function openCodex() {
+    if (codexOpen) return;
+    codexOpen = true;
+    closeMenu();
+    el.codex.classList.add('show');
+    invoke('set_codex', { open: true });
+    invoke('get_codex')
+      .then(renderCodex)
+      .catch(() => {});
+  }
+
+  function closeCodex() {
+    if (!codexOpen) return;
+    codexOpen = false;
+    el.codex.classList.remove('show');
+    invoke('set_codex', { open: false });
+  }
+
+  function renderCodex(d) {
+    if (!d) return;
+    const got = d.slots.filter((s) => s.collected).length;
+    el.codexCount.textContent = `已收集 ${got} / ${d.slots.length} 种`;
+    el.codexSlots.innerHTML = '';
+    for (const s of d.slots) {
+      const div = document.createElement('div');
+      div.className = 'slot' + (s.collected ? ' got' : '');
+      const nm = document.createElement('b');
+      nm.textContent = s.collected ? s.name : '???';
+      const hint = document.createElement('i');
+      hint.textContent = s.hint;
+      div.appendChild(nm);
+      div.appendChild(hint);
+      if (s.collected && s.count > 1) {
+        const em = document.createElement('em');
+        em.textContent = '×' + s.count;
+        div.appendChild(em);
+      }
+      el.codexSlots.appendChild(div);
+    }
+    el.codexGens.innerHTML = '';
+    const gens = (d.generations || []).slice().reverse();
+    if (!gens.length) {
+      const empty = document.createElement('div');
+      empty.className = 'gen-empty';
+      empty.textContent = '还没有收集过。成体之后右键"收集它"。';
+      el.codexGens.appendChild(empty);
+      return;
+    }
+    for (const g of gens) {
+      const row = document.createElement('div');
+      row.className = 'gen-row';
+      const b = document.createElement('b');
+      b.textContent = `第${g.gen}代`;
+      const sp = document.createElement('span');
+      sp.className = 'sp';
+      sp.textContent = g.species_name;
+      const rng = document.createElement('span');
+      rng.className = 'rng';
+      rng.textContent = `${g.from} ~ ${g.to}`;
+      const hrs = document.createElement('span');
+      hrs.className = 'hrs';
+      hrs.textContent =
+        g.active_min >= 60 ? (g.active_min / 60).toFixed(1) + ' 小时' : Math.round(g.active_min) + ' 分钟';
+      row.appendChild(b);
+      row.appendChild(sp);
+      row.appendChild(rng);
+      row.appendChild(hrs);
+      if (g.marks && g.marks.length) {
+        const mk = document.createElement('span');
+        mk.className = 'mk';
+        mk.textContent = g.marks.join(' · ');
+        row.appendChild(mk);
+      }
+      row.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        visitGen(g);
+      });
+      el.codexGens.appendChild(row);
+    }
+  }
+
+  // 探视:用冻存的基因与外观,让已收集的生物在缸里再游 9 秒。
+  function visitGen(g) {
+    closeCodex();
+    previewSpec = {
+      stage: 3,
+      growth: 0.6,
+      traits: {
+        vitality: g.visual ? g.visual.vitality : 0.7,
+        glow: g.visual ? g.visual.glow : 0.5,
+        hue: g.visual ? g.visual.hue : 0.2,
+        turbidity: g.visual ? g.visual.turbidity : 0.2,
+        motility: g.visual ? g.visual.motility : 0.6,
+        rhythm: g.visual ? g.visual.rhythm_t : 0.5,
+        spots: g.visual ? g.visual.spots : 0,
+      },
+      sig: {},
+      genome: g.genome,
+      archetype: g.archetype,
+      species_id: g.species_id,
+      paused: false,
+      active: true,
+      demo: true,
+    };
+    previewUntil = performance.now() + 9000;
+    toast(`探视:第${g.gen}代 · ${g.species_name}`);
+  }
+
+  el.codexClose.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    closeCodex();
+  });
 
   /* ---------- 悬停 / 菜单 ---------- */
 
@@ -307,6 +452,19 @@
       toast(next ? '观察已暂停' : '继续观察');
     } else if (act === 'diag') {
       applyDiag(!diagOpen, false);
+    } else if (act === 'collect') {
+      if (!tgt.can_collect) {
+        toast('它还没有定形,再陪它一阵');
+        return;
+      }
+      invoke('collect_creature')
+        .then((r) => {
+          Scene.burst(40);
+          toast(`已收集:${r.name} · ${r.species}`);
+        })
+        .catch((e) => toast(String(e)));
+    } else if (act === 'codex') {
+      openCodex();
     } else if (act === 'scale') {
       const scales = [0.8, 1.0, 1.25];
       const i = scales.findIndex((v) => Math.abs(v - uiScale) < 0.01);
@@ -340,6 +498,7 @@
     if (menuOpen && !el.menu.contains(e.target)) closeMenu();
     if (aboutOpen && !el.about.contains(e.target)) closeAbout();
     if (diagOpen && !el.diag.contains(e.target)) applyDiag(false, false);
+    if (codexOpen && !el.codex.contains(e.target)) closeCodex();
   });
 
   document.getElementById('diag-close').addEventListener('mousedown', (e) => {
@@ -361,6 +520,10 @@
 
   document.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    if (codexOpen) {
+      closeCodex();
+      return;
+    }
     if (diagOpen) {
       applyDiag(false, false);
       return;
@@ -436,11 +599,17 @@
     ease(dt);
 
     // 活跃时 24fps，挂机时降到 8fps：常驻桌面，帧率也要会休息。
-    const fps = tgt.paused ? 10 : tgt.active ? 24 : 8;
+    // 探视期间固定 24fps,让老生物游得流畅。
+    const previewOn = previewSpec && ts < previewUntil;
+    if (!previewOn && previewSpec) previewSpec = null;
+    const fps = previewOn ? 24 : tgt.paused ? 10 : tgt.active ? 24 : 8;
     if (!uiCollapsed && ts - lastDraw >= 1000 / fps) {
       dtDraw = Math.max(0.016, (ts - lastDraw) / 1000);
       lastDraw = ts;
-      Scene.frame(ts, cur, dtDraw);
+      const st = previewOn
+        ? previewSpec
+        : { ...cur, genome: uiGenome || undefined, archetype: uiArch, species_id: uiSpeciesId };
+      Scene.frame(ts, st, dtDraw);
     }
     updateCard(ts);
     requestAnimationFrame(loop);
