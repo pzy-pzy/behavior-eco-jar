@@ -1,7 +1,6 @@
 @echo off
-chcp 65001 >nul
-rem ä¸€é”®:å¢é‡æ„å»º + æ¼”ç¤ºæ¨¡å¼(çº¦ 2 åˆ†é’Ÿä¸€ä¸ªä¸–ä»£:å‡ºç”Ÿ-æ˜¾å½¢-ç¹ç››-è‡ªåŠ¨æ”¶é›†)
-rem æ•°æ®éš”ç¦»åœ¨ %TEMP%\ecojar-demo,å¯ä¸æ­£å¼å®ä¾‹åŒæ—¶è¿è¡Œ;å›¾é‰´è®°å½•è·¨æ¬¡ç´¯è®¡
+rem Ò»¼ü:ÔöÁ¿¹¹½¨ + ÑİÊ¾Ä£Ê½(Ô¼ 2 ·ÖÖÓÒ»¸öÊÀ´ú,¿ÉÓëÕıÊ½ÊµÀıÍ¬Ê±ÔËĞĞ)
+rem Êı¾İ¸ôÀëÔÚ %TEMP%\ecojar-demo,Í¼¼ø¼ÇÂ¼¿ç´ÎÀÛ¼Æ
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cargo.ps1" build --release
 if errorlevel 1 goto :fail
 set "ECOJAR_DATA_DIR=%TEMP%\ecojar-demo"
@@ -9,5 +8,5 @@ start "" "%~dp0..\target\release\ecojar.exe" --demo
 exit /b 0
 :fail
 echo.
-echo æ„å»ºå¤±è´¥,è¯·æ£€æŸ¥ä¸Šæ–¹è¾“å‡º
+echo ¹¹½¨Ê§°Ü,Çë¼ì²éÉÏ·½Êä³ö
 pause

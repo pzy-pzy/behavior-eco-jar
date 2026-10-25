@@ -1,6 +1,5 @@
 @echo off
-chcp 65001 >nul
-rem ä¸€é”®:è·‘å…¨éƒ¨å•å…ƒæµ‹è¯•(Release é…ç½®,å¤ç”¨ç¼–è¯‘ç¼“å­˜,ç§’çº§)
+rem Ò»¼ü:ÅÜÈ«²¿µ¥Ôª²âÊÔ(Release ÅäÖÃ,¸´ÓÃ±àÒë»º´æ)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cargo.ps1" test --release
 echo.
 pause

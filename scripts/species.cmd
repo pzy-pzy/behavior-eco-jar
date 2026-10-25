@@ -1,24 +1,22 @@
 @echo off
-chcp 65001 >nul
-rem ä¸€é”®:ç›´æ¥é¢„è§ˆæŸä¸ªç‰©ç§çš„å®Œæ»¡å½¢æ€(ä¸è‡ªåŠ¨æ”¶é›†,å¯ä¸æ­£å¼å®ä¾‹åŒæ—¶è¿è¡Œ)
-rem ç”¨æ³•: species.cmd <deep_glow|tide|school|sunken_jade|dawn|night>
-if "%~1"=="" (
-  echo ç”¨æ³•: species.cmd ^<ç‰©ç§ id^>
-  echo   deep_glow    æ·±å…‰ç§(æµ®ä¼å‹,èšç„¦æ—¶çš„ç¨³å®šè¾‰å…‰)
-  echo   tide         æ½®æ±ç§(æµ®ä¼å‹,éšèŠ‚å¾‹å¼€åˆ)
-  echo   school       ç¾¤æ¸¸ç§(ç¾¤æ¸¸å‹,6 æ¡å°é±¼,ç‚¹å‡»æƒŠæ•£)
-  echo   sunken_jade  æ²‰ç‰ç§(è¾å°„å‹,åº•æ –æµ·æ˜Ÿ,ç‚¹å‡»å·è…•)
-  echo   dawn         æ™¨å…‰ç§(æµçº¿å‹,é‡‘è‰²ä¾§çº¿,ç‚¹å‡»æ€¥å†²)
-  echo   night        å¤œæ´„ç§(æµçº¿å‹,è“ç´«èŠ‚æ®µ,ç‚¹å‡»æ€¥å†²)
-  pause
-  exit /b 1
-)
+rem Ò»¼ü:Ö±½ÓÔ¤ÀÀÄ³¸öÎïÖÖµÄÍêÂúĞÎÌ¬(²»×Ô¶¯ÊÕ¼¯,¿ÉÓëÕıÊ½ÊµÀıÍ¬Ê±ÔËĞĞ)
+if "%~1"=="" goto :usage
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cargo.ps1" build --release
 if errorlevel 1 goto :fail
 set "ECOJAR_DATA_DIR=%TEMP%\ecojar-preview-%~1"
 start "" "%~dp0..\target\release\ecojar.exe" --demo --preview-species %~1
 exit /b 0
+:usage
+echo ÓÃ·¨: species.cmd ÎïÖÖid
+echo   deep_glow    Éî¹âÖÖ ¸¡É¡ĞÍ
+echo   tide         ³±Ï«ÖÖ ¸¡É¡ĞÍ
+echo   school       ÈºÓÎÖÖ ÈºÓÎĞÍ,6 ÌõĞ¡Óã,µã»÷¾ªÉ¢
+echo   sunken_jade  ³ÁÓñÖÖ ·øÉäĞÍ,µ×ÆÜº£ĞÇ,µã»÷¾íÍó
+echo   dawn         ³¿¹âÖÖ Á÷ÏßĞÍ,½ğÉ«²àÏß,µã»÷¼±³å
+echo   night        Ò¹ä§ÖÖ Á÷ÏßĞÍ,À¶×Ï½Ú¶Î,µã»÷¼±³å
+pause
+exit /b 1
 :fail
 echo.
-echo æ„å»ºå¤±è´¥,è¯·æ£€æŸ¥ä¸Šæ–¹è¾“å‡º
+echo ¹¹½¨Ê§°Ü,Çë¼ì²éÉÏ·½Êä³ö
 pause
