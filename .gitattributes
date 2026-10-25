@@ -3,3 +3,5 @@
 *.ico binary
 *.zip binary
 *.exe binary
+# Windows 批处理必须是 GBK + CRLF 原始字节,不做任何文本转换
+*.cmd -text
