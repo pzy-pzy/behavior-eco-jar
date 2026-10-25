@@ -17,7 +17,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, State, WebviewWindow};
 
-use model::Eco;
+use model::{Agg, Eco, Genome};
 use sensor::{Event, Sample, Tracker};
 use signature::Signature;
 use store::Store;
@@ -55,6 +55,19 @@ fn local_date_key() -> String {
 #[cfg(not(windows))]
 fn local_date_key() -> String {
     String::from("1970-01-01")
+}
+
+#[cfg(windows)]
+fn local_hour() -> u8 {
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut t = unsafe { std::mem::zeroed::<windows_sys::Win32::Foundation::SYSTEMTIME>() };
+    unsafe { GetLocalTime(&mut t) };
+    (t.wHour & 0xFF) as u8
+}
+
+#[cfg(not(windows))]
+fn local_hour() -> u8 {
+    0
 }
 
 /// 单实例：第二个进程直接退出，避免两个缸抢同一个 WebView2 目录。
@@ -118,6 +131,11 @@ struct Snapshot {
     ui_scale: f32,
     opacity: f32,
     collapsed: bool,
+    /// 当前代数与个体基因(M0 起随快照下发,前端 M1 使用)。
+    generation: u32,
+    archetype: String,
+    genome: Genome,
+    creature_name: String,
 }
 
 struct Inner {
@@ -146,6 +164,11 @@ struct Inner {
     ui_scale: f32,
     opacity: f32,
     collapsed: bool,
+    /// 世代制(M0):基因、终身聚合、代数。
+    genome: Genome,
+    agg: Agg,
+    generation: u32,
+    creature_name: Option<String>,
 }
 
 struct TrayHandles {
@@ -219,6 +242,13 @@ impl AppState {
             ui_scale: inner.ui_scale,
             opacity: inner.opacity,
             collapsed: inner.collapsed,
+            generation: inner.generation,
+            archetype: "medusa".to_string(),
+            genome: inner.genome.clone(),
+            creature_name: inner
+                .creature_name
+                .clone()
+                .unwrap_or_else(|| format!("第 {} 代", inner.generation)),
         }
     }
 }
@@ -408,6 +438,9 @@ fn reset_jar(app: AppHandle, state: State<AppState>) {
         inner.eco.last_tick_ms = now_ms();
         inner.eco.last_break_ms = now_ms();
         inner.sig = Signature::default();
+        // 重置 = 重新开始这一代:换一只新生物,代数不前进(不计入图鉴)。
+        inner.genome = Genome::random();
+        inner.agg = Agg::neutral();
         inner.day_active_sec = 0;
         inner.day_breaks = 0;
         let snap = state.snapshot_at(&inner, now_ms());
@@ -723,6 +756,11 @@ fn main() {
                 persisted.day_key, today, day_active_sec, day_breaks
             ));
 
+            let genome = persisted.genome.clone().unwrap_or_else(Genome::random);
+            let agg = persisted.agg.clone().unwrap_or_else(|| Agg::estimated(&eco));
+            let generation = persisted.generation.max(1);
+            let creature_name = persisted.creature_name.clone();
+
             let tray = build_tray(app, persisted.paused, autostart_state == 1)?;
 
             let state = AppState {
@@ -750,6 +788,10 @@ fn main() {
                     ui_scale,
                     opacity,
                     collapsed,
+                    genome,
+                    agg,
+                    generation,
+                    creature_name,
                 }),
                 menu_open: AtomicBool::new(false),
                 hover_now: AtomicBool::new(false),
@@ -1126,6 +1168,7 @@ fn tick_once(handle: &AppHandle) {
             inner.day_key = today;
             inner.day_active_sec = 0;
             inner.day_breaks = 0;
+            inner.agg.roll_day();
             logging::write("day rollover");
         }
 
@@ -1187,6 +1230,7 @@ fn advance(inner: &mut Inner, store: &Store, now: u64, sample: &Sample, active: 
     inner.last_active = active;
     if active {
         inner.day_active_sec += 1;
+        inner.agg.tick(&inner.sig, local_hour());
     }
     inner
         .eco
@@ -1222,6 +1266,11 @@ fn save_now(handle: &AppHandle, state: &AppState) {
         ui_scale: Some(inner.ui_scale),
         opacity: Some(inner.opacity),
         collapsed: Some(inner.collapsed),
+        schema: 2,
+        generation: inner.generation,
+        genome: Some(inner.genome.clone()),
+        agg: Some(inner.agg.clone()),
+        creature_name: inner.creature_name.clone(),
     });
     inner.last_save = now_ms();
 }

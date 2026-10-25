@@ -10,6 +10,20 @@ const Scene = (() => {
   // 主体尺寸跟着培养皿走，方便整体缩放。
   const BODY_UNIT = 44 * (R / 132);
 
+  /* 图纸(Archetype)= 体型 + 生态位运动 + 互动反应,每张图纸实现
+     pose / drawBack / drawMain / drawFront 四个接口,环境(背景、
+     微粒、气泡、焦散)由 Scene 统一负责。M0 仅浮伞型,绘制代码与
+     旧版一致;新图纸(docs §5.4)按此接口增加。 */
+  const DEFAULT_GENOME = {
+    seed: 20261022,
+    wob: [0.55, 0.32, 0.2],
+    cilia_bias: 0,
+    size: 1,
+    hue_bias: 0,
+    vacuoles: 3,
+    satellites_bias: 0,
+  };
+
   let canvas = null;
   let ctx = null;
   let dpr = 1;
@@ -505,6 +519,27 @@ const Scene = (() => {
     ctx.restore();
   }
 
+  /* ---------- 图纸注册表 ---------- */
+
+  const Archetypes = {
+    // 浮伞型:中层浮游,收缩-滑行脉冲推进(即旧版主体,绘制代码未动)。
+    medusa: {
+      pose,
+      drawBack(t, c, p, tr) {
+        drawSatellites(t, c, p, tr, false);
+        drawCilia(t, c, p, tr, false);
+      },
+      drawMain(t, c, p, tr) {
+        drawGlow(t, c, p, tr);
+        drawBody(t, c, p, tr);
+      },
+      drawFront(t, c, p, tr) {
+        drawCilia(t, c, p, tr, true);
+        drawSatellites(t, c, p, tr, true);
+      },
+    },
+  };
+
   /* ---------- 主循环 ---------- */
 
   function frame(ts, st, dt) {
@@ -532,15 +567,18 @@ const Scene = (() => {
 
     drawCaustics(t, p, tr.glow);
 
-    const c = pose(t, st);
+    const spec = {
+      ...st,
+      genome: st.genome || DEFAULT_GENOME,
+      archetype: st.archetype || 'medusa',
+    };
+    const arch = Archetypes[spec.archetype] || Archetypes.medusa;
+    const c = arch.pose(t, spec);
     drawMotes(t, p, tr, c.m);
 
-    drawSatellites(t, c, p, tr, false);
-    drawCilia(t, c, p, tr, false);
-    drawGlow(t, c, p, tr);
-    drawBody(t, c, p, tr);
-    drawCilia(t, c, p, tr, true);
-    drawSatellites(t, c, p, tr, true);
+    arch.drawBack(t, c, p, tr);
+    arch.drawMain(t, c, p, tr);
+    arch.drawFront(t, c, p, tr);
 
     updateBubbles(dt);
     drawBubbles();

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::Eco;
+use crate::model::{Agg, Eco, Genome};
 use crate::signature::Bucket;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,6 +43,39 @@ pub struct Persisted {
     /// 收进屏幕边缘的小圆点
     #[serde(default)]
     pub collapsed: Option<bool>,
+    /// 存档结构版本;缺失(0)表示旧档,加载时迁移到 2。
+    #[serde(default)]
+    pub schema: u32,
+    /// 当前是第几代生物。
+    #[serde(default)]
+    pub generation: u32,
+    /// 当前代个体的基因。
+    #[serde(default)]
+    pub genome: Option<Genome>,
+    /// 当前代的终身聚合(物种判定输入)。
+    #[serde(default)]
+    pub agg: Option<Agg>,
+    /// 当前代的名字(自动命名在 M2,之前为空)。
+    #[serde(default)]
+    pub creature_name: Option<String>,
+}
+
+impl Persisted {
+    /// 旧档/缺档补全新字段。旧档没有逐秒聚合,只能粗估。
+    pub fn migrate(&mut self) {
+        if self.schema < 2 {
+            self.schema = 2;
+        }
+        if self.generation == 0 {
+            self.generation = 1;
+        }
+        if self.genome.is_none() {
+            self.genome = Some(Genome::random());
+        }
+        if self.agg.is_none() {
+            self.agg = Some(Agg::estimated(&self.eco));
+        }
+    }
 }
 
 impl Default for Persisted {
@@ -59,6 +92,11 @@ impl Default for Persisted {
             ui_scale: None,
             opacity: None,
             collapsed: None,
+            schema: 2,
+            generation: 1,
+            genome: None,
+            agg: None,
+            creature_name: None,
         }
     }
 }
@@ -114,10 +152,12 @@ impl Store {
     }
 
     pub fn load(&self) -> Persisted {
-        fs::read_to_string(self.state_path())
+        let mut p: Persisted = fs::read_to_string(self.state_path())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        p.migrate();
+        p
     }
 
     pub fn save(&self, p: &Persisted) {
@@ -235,5 +275,39 @@ mod tests {
         let text = fs::read_to_string(store.metrics_path()).unwrap();
         assert_eq!(text.lines().count(), 1);
         assert!(text.contains("\"s\":2"));
+    }
+
+    #[test]
+    fn old_state_migrates_to_schema2() {
+        let store = temp_store("migrate");
+        // 手写一份 v1 旧档:没有任何 schema v2 字段。
+        let old = r#"{"eco":{"vitality":0.55,"glow":0.12,"hue":0.15,"turbidity":0.35,"motility":0.3,"rhythm_t":0.3,"spots":0.0,"active_minutes":120.0,"focus_minutes":60.0,"last_tick_ms":1,"last_break_ms":1,"stage":1},"paused":false}"#;
+        fs::write(store.state_path(), old).unwrap();
+        let p = store.load();
+        assert_eq!(p.schema, 2);
+        assert_eq!(p.generation, 1);
+        assert!(p.genome.is_some());
+        let agg = p.agg.unwrap();
+        // focus_minutes/active_minutes = 0.5,粗估的专注均值
+        assert!((agg.focus_ema - 0.5).abs() < 0.001, "focus_ema={}", agg.focus_ema);
+        assert!(agg.days >= 1);
+    }
+
+    #[test]
+    fn v2_fields_roundtrip() {
+        let store = temp_store("roundtrip2");
+        let mut p = Persisted::default();
+        p.generation = 3;
+        p.genome = Some(Genome::from_seed(777));
+        p.agg = Some(Agg::neutral());
+        p.creature_name = Some("初代".into());
+        store.save(&p);
+
+        let q = store.load();
+        assert_eq!(q.schema, 2);
+        assert_eq!(q.generation, 3);
+        assert_eq!(q.genome.unwrap().seed, 777);
+        assert_eq!(q.agg.unwrap().days, 1);
+        assert_eq!(q.creature_name.as_deref(), Some("初代"));
     }
 }
