@@ -74,12 +74,18 @@ fn local_hour() -> u8 {
     0
 }
 
-/// 单实例：第二个进程直接退出，避免两个缸抢同一个 WebView2 目录。
-fn already_running() -> bool {
+/// 单实例:第二个进程直接退出,避免两个缸抢同一个 WebView2 目录。
+/// 演示/预览用独立互斥名,可以和正式实例同时开着(数据目录本来就分开)。
+fn already_running(demo: bool) -> bool {
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::System::Threading::CreateMutexW;
-        let name: Vec<u16> = "Local\\BehaviorEcoJar.SingleInstance\0".encode_utf16().collect();
+        let base = if demo {
+            "Local\\BehaviorEcoJar.DemoInstance\0"
+        } else {
+            "Local\\BehaviorEcoJar.SingleInstance\0"
+        };
+        let name: Vec<u16> = base.encode_utf16().collect();
         let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         if handle.is_null() {
             logging::write("single-instance mutex creation failed");
@@ -189,6 +195,8 @@ struct Inner {
     started_on: String,
     gen_breaks: u32,
     demo_bloom_sim: u64,
+    /// --preview-species 预览模式:锁定形态展示,不触发演示自动收集。
+    demo_preview: bool,
 }
 
 struct TrayHandles {
@@ -820,7 +828,25 @@ fn demo_sample(sim_ms: u64) -> Sample {
 }
 
 fn main() {
-    let demo = std::env::args().any(|a| a == "--demo");
+    // 参数:--demo 演示模式;--preview-species <id> 直接预览某物种的完满形态。
+    let argv: Vec<String> = std::env::args().collect();
+    let mut demo = false;
+    let mut preview_species: Option<String> = None;
+    let mut i = 1;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--demo" => demo = true,
+            "--preview-species" => {
+                demo = true;
+                if let Some(id) = argv.get(i + 1) {
+                    preview_species = Some(id.clone());
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
     let data_root = store::data_root();
     logging::init(&data_root);
     logging::write(&format!(
@@ -832,7 +858,7 @@ fn main() {
             .unwrap_or_default()
     ));
 
-    if already_running() {
+    if already_running(demo) {
         logging::write("another instance is running; exit");
         return;
     }
@@ -922,7 +948,21 @@ fn main() {
             let agg = persisted.agg.clone().unwrap_or_else(|| Agg::estimated(&eco));
             let generation = persisted.generation.max(1);
             let creature_name = persisted.creature_name.clone();
-            let species_id = persisted.species.as_deref().and_then(species::by_id);
+            let mut species_id = persisted.species.as_deref().and_then(species::by_id);
+            // --preview-species <id>:直接看某个物种的完满形态(演示数据目录,不自动收集)。
+            if let Some(def) = preview_species.as_deref().and_then(species::by_id) {
+                species_id = Some(def);
+                eco.stage = 3;
+                eco.active_minutes = 100_000.0;
+                eco.vitality = 0.85;
+                eco.glow = 0.65;
+                eco.motility = 0.7;
+                logging::write(&format!("preview species: {}", def.id));
+            } else if preview_species.is_some() {
+                logging::write(&format!(
+                    "unknown preview species: {preview_species:?}, see species::SPECIES"
+                ));
+            }
             let started_on = persisted
                 .started_on
                 .clone()
@@ -964,6 +1004,7 @@ fn main() {
                     started_on,
                     gen_breaks,
                     demo_bloom_sim: 0,
+                    demo_preview: preview_species.is_some(),
                 }),
                 menu_open: AtomicBool::new(false),
                 hover_now: AtomicBool::new(false),
@@ -1389,7 +1430,8 @@ fn tick_once(handle: &AppHandle) {
         }
 
         // 演示模式:繁盛稳定展示约 25 秒后自动收集,循环走完整个世代。
-        if inner.demo && inner.eco.stage >= 3 && inner.species.is_some() {
+        // 预览模式(--preview-species)只看形态,不进收集循环。
+        if inner.demo && !inner.demo_preview && inner.eco.stage >= 3 && inner.species.is_some() {
             inner.demo_bloom_sim += 1000;
             if inner.demo_bloom_sim > 25_000 {
                 let rec = perform_collect(&mut inner, now, &today);
@@ -1597,6 +1639,7 @@ mod tests {
             started_on: "2026-10-20".into(),
             gen_breaks: 5,
             demo_bloom_sim: 0,
+            demo_preview: false,
         };
         inner.eco.active_minutes = 950.0;
         inner.eco.stage = 3;

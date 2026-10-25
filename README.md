@@ -228,6 +228,22 @@ python tools/cdp.py "window.__TAURI__.core.invoke('set_preview_stage',{stage:nul
 # 打开 tools/preview.html
 ```
 
+## 一键测试（dev 分支）
+
+在资源管理器里双击 `scripts/` 下对应脚本即可，也可以从终端运行：
+
+```cmd
+scripts\test.cmd               :: 全部单元测试（Release，复用编译缓存）
+scripts\demo.cmd               :: 演示模式：约 2 分钟走完一代（出生→显形→繁盛→自动收集），
+                                :: 数据隔离在 %TEMP%\ecojar-demo，可与正式实例同时开；
+                                :: 多跑几代后右键“图鉴”就能看到收藏在累积
+scripts\species.cmd school     :: 直接看某个物种的完满形态（六种 id 见脚本内说明），
+                                :: 不自动收集，适合检查各图纸的绘制与点击反应
+```
+
+手动检查点：显形 toast 与形态切换、右键“收集它”、图鉴面板开合（窗口临时放大）、
+点击历代条目的“探视”、四张图纸各自的点击反应（浮伞收缩 / 急冲 / 惊散 / 卷腕）。
+
 ## 验收记录
 
 - `cargo test`：17 个单元测试通过（签名数学、节律、过劳负荷、离线衰减、阶段推进、存档往返、
